@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Deutsch Brücke">
+  <rect width="48" height="48" rx="14" fill="#1f6f6d" />
+  <circle cx="24" cy="13.5" r="3.2" fill="#e08a3d" />
+  <path d="M9.5 32.5h29" fill="none" stroke="#fdf9f2" stroke-width="2.2" stroke-linecap="round" opacity="0.95" />
+  <path d="M13 32.5c0-7 4.5-12 11-12s11 5 11 12" fill="none" stroke="#fdf9f2" stroke-width="2.2" stroke-linecap="round" />
+  <path d="M17 32.5v4M31 32.5v4M13 36.5h8M27 36.5h8" fill="none" stroke="#fdf9f2" stroke-width="2.2" stroke-linecap="round" opacity="0.8" />
+</svg>

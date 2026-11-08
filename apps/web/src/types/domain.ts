@@ -1,0 +1,280 @@
+export type CefrLevel = "A1" | "A2" | "B1";
+export type UiLanguage = "ar" | "en";
+export type NativeDialect =
+  | "egyptian"
+  | "levantine"
+  | "gulf"
+  | "maghrebi"
+  | "msa"
+  | "other";
+export type ThemeMode = "light" | "dark" | "system";
+
+export type GrammarTopic =
+  | "articles"
+  | "cases"
+  | "word_order"
+  | "vocabulary"
+  | "prepositions";
+
+export type GrammarArticle = "der" | "die" | "das";
+
+export type MistakeType =
+  | "article"
+  | "case"
+  | "verb_position"
+  | "verb_conjugation"
+  | "preposition"
+  | "vocabulary"
+  | "spelling"
+  | "punctuation"
+  | "word_order"
+  | "register"
+  | "other";
+
+export interface Mistake {
+  type: MistakeType;
+  original: string;
+  fix: string;
+  explanation_ar: string;
+}
+
+export interface Correction {
+  corrected: string;
+  mistakes: Mistake[];
+  praise_ar: string;
+  follow_up_question_de: string;
+}
+
+export interface VocabSuggestion {
+  word: string;
+  article: GrammarArticle | null;
+  plural: string | null;
+  translation_ar: string;
+  example_de: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  translationAr?: string;
+  correction?: Correction;
+  vocabulary?: VocabSuggestion[];
+  createdAt: string;
+  isStarter?: boolean;
+  mode?: "live" | "demo";
+}
+
+export interface Conversation {
+  id: string;
+  scenarioId: ScenarioId;
+  messages: ChatMessage[];
+  startedAt: string;
+  updatedAt: string;
+}
+
+export interface WeakSpot {
+  id: string;
+  topic: GrammarTopic;
+  pattern: string;
+  labelAr: string;
+  labelEn: string;
+  count: number;
+  lastSeen: string;
+}
+
+export type VocabularyCategory =
+  | "home"
+  | "people"
+  | "food"
+  | "city"
+  | "work"
+  | "health"
+  | "shopping"
+  | "other";
+
+export interface VocabCard {
+  id: string;
+  word: string;
+  article: GrammarArticle | null;
+  plural: string | null;
+  translationAr: string;
+  translationEn: string;
+  exampleDe: string;
+  exampleAr: string;
+  level: CefrLevel;
+  category: VocabularyCategory;
+  ease: number;
+  intervalDays: number;
+  repetitions: number;
+  dueDate: string;
+  createdAt: string;
+  lastReviewedAt: string | null;
+  source: "seed" | "chat" | "manual";
+}
+
+export type StarterVocabCard = Omit<
+  VocabCard,
+  | "ease"
+  | "intervalDays"
+  | "repetitions"
+  | "dueDate"
+  | "createdAt"
+  | "lastReviewedAt"
+  | "source"
+>;
+
+export type SrsQuality = "again" | "hard" | "good" | "easy";
+
+export interface DrillResult {
+  id: string;
+  topic: GrammarTopic;
+  pattern: string;
+  questionId: string;
+  correct: boolean;
+  createdAt: string;
+}
+
+export interface DailyActivity {
+  date: string;
+  xp: number;
+  seconds: number;
+}
+
+export interface StreakData {
+  current: number;
+  longest: number;
+  lastPracticeDate: string | null;
+}
+
+export interface Profile {
+  displayName: string;
+  level: CefrLevel;
+  dailyGoalMinutes: number;
+  uiLanguage: UiLanguage;
+  nativeDialect: NativeDialect;
+  theme: ThemeMode;
+  onboardingCompleted: boolean;
+  createdAt: string;
+}
+
+export interface ProgressState {
+  version: 1;
+  ownerId: string;
+  profile: Profile;
+  xp: number;
+  weakSpots: WeakSpot[];
+  vocabCards: VocabCard[];
+  drillResults: DrillResult[];
+  conversations: Conversation[];
+  activity: DailyActivity[];
+  streak: StreakData;
+}
+
+export type ScenarioId =
+  | "cafe"
+  | "doctor"
+  | "interview"
+  | "office"
+  | "shopping";
+
+export interface Scenario {
+  id: ScenarioId;
+  titleAr: string;
+  titleEn: string;
+  descriptionAr: string;
+  descriptionEn: string;
+  level: CefrLevel;
+  durationMinutes: number;
+  settingAr: string;
+  settingEn: string;
+  aiRoleAr: string;
+  aiRoleEn: string;
+  openingDe: string;
+  openingAr: string;
+  openingEn: string;
+  color: "teal" | "orange" | "blue" | "rose" | "green";
+  goalsAr: string[];
+  goalsEn: string[];
+}
+
+export interface DrillQuestion {
+  id: string;
+  topic: Extract<GrammarTopic, "articles" | "cases" | "prepositions">;
+  pattern: string;
+  level: CefrLevel;
+  promptBefore: string;
+  promptAfter: string;
+  hintAr: string;
+  hintEn: string;
+  options: string[];
+  correctAnswer: string;
+  translationAr: string;
+  translationEn: string;
+  explanationAr: string;
+  explanationEn: string;
+  weakSpotAr: string;
+  weakSpotEn: string;
+  caseLabelAr?: string;
+  caseLabelEn?: string;
+}
+
+export interface SentenceToken {
+  id: string;
+  text: string;
+  role:
+    | "subject"
+    | "verb"
+    | "verb_end"
+    | "object"
+    | "time"
+    | "place"
+    | "conjunction"
+    | "particle"
+    | "adjective"
+    | "other";
+}
+
+export interface SentenceExercise {
+  id: string;
+  level: CefrLevel;
+  kind: "verb-second" | "verb-final" | "separable" | "question" | "general";
+  promptAr: string;
+  promptEn: string;
+  translationAr: string;
+  translationEn: string;
+  tokens: SentenceToken[];
+  correctOrder: string[];
+  explanationAr: string;
+  explanationEn: string;
+  structureLabels: Array<{
+    role: SentenceToken["role"];
+    labelAr: string;
+    labelEn: string;
+  }>;
+}
+
+export interface PlacementQuestion {
+  id: string;
+  level: CefrLevel;
+  questionAr: string;
+  questionEn: string;
+  sentenceBefore: string;
+  sentenceAfter: string;
+  options: string[];
+  correctAnswer: string;
+  explanationAr: string;
+}
+
+export type AiAction = "explain" | "simplify" | "translate";
+
+export interface WordDetails {
+  word: string;
+  article: GrammarArticle | null;
+  plural: string | null;
+  part_of_speech: string;
+  meaning_ar: string;
+  meaning_en: string;
+  example_de: string;
+  example_ar: string;
+}

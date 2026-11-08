@@ -1,0 +1,30 @@
+# secrets
+.env
+.env.local
+.env.*.local
+
+# dependencies & builds
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.tsbuildinfo
+*.local
+
+# editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# test output
+playwright-report/
+test-results/
