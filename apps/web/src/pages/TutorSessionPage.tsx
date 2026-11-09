@@ -14,7 +14,12 @@ import {
 import type { AiAction } from "@/types/domain";
 import { getScenario } from "@/data/scenarios";
 import { useAppPreferences } from "@/state/useAppPreferences";
+import { useCustomScenarios } from "@/state/CustomScenariosProvider";
 import { useProgress } from "@/state/ProgressProvider";
+import {
+  customScenarioToApiPayload,
+  customScenarioToScenario,
+} from "@/services/customScenarioMapping";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useSpeechRecognition } from "@/hooks/useSpeech";
 import {
@@ -37,7 +42,22 @@ import { WordSheet } from "@/components/tutor/WordSheet";
 
 export function TutorSessionPage() {
   const { scenarioId } = useParams();
-  const scenario = scenarioId ? getScenario(scenarioId) : undefined;
+  const builtInScenario = scenarioId ? getScenario(scenarioId) : undefined;
+  const {
+    loading: customLoading,
+    getScenario: getCustomScenario,
+  } = useCustomScenarios();
+  const customScenario =
+    !builtInScenario && scenarioId?.startsWith("custom_")
+      ? getCustomScenario(scenarioId)
+      : undefined;
+  const scenario =
+    builtInScenario ??
+    (customScenario ? customScenarioToScenario(customScenario) : undefined);
+  const customPending =
+    !builtInScenario &&
+    Boolean(scenarioId?.startsWith("custom_")) &&
+    customLoading;
   const { t, language } = useAppPreferences();
   const {
     progress,
@@ -119,6 +139,20 @@ export function TutorSessionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  if (customPending) {
+    return (
+      <div
+        className="animate-fade-up space-y-4"
+        role="status"
+        aria-label={t("common.loading")}
+      >
+        <div className="h-9 w-32 animate-pulse rounded-xl bg-muted/60" />
+        <div className="h-28 animate-pulse rounded-3xl bg-muted/50" />
+        <div className="h-[60dvh] animate-pulse rounded-3xl bg-muted/40" />
+      </div>
+    );
+  }
+
   if (!scenario) {
     return (
       <EmptyState
@@ -165,11 +199,14 @@ export function TutorSessionPage() {
     try {
       const { data, mode } = await requestTutorTurn({
         scenarioId: scenario.id,
-        level: progress?.profile.level ?? "A1",
+        level: customScenario?.level ?? progress?.profile.level ?? "A1",
         dialect: progress?.profile.nativeDialect ?? "egyptian",
         safeMode,
         learnerMessage: text,
         history,
+        ...(customScenario
+          ? { customScenario: customScenarioToApiPayload(customScenario) }
+          : {}),
       });
 
       if (mode === "live" || mode === "demo" || mode === "unavailable") {
@@ -281,6 +318,12 @@ export function TutorSessionPage() {
                 {description}
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {customScenario ? (
+                  <Badge tone="primary">
+                    <Sparkles className="h-3 w-3" aria-hidden="true" />
+                    {t("tutor.aiMade")}
+                  </Badge>
+                ) : null}
                 <Badge tone="neutral">
                   {t("tutor.level", {
                     level: t(LEVEL_LABEL_KEY[scenario.level]),

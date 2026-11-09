@@ -4,18 +4,27 @@ import { config } from "../config.js";
 import { parseJsonObject } from "../lib/json.js";
 import {
   explainResponseSchema,
+  scenarioModelResponseSchema,
   simplifyResponseSchema,
   translateResponseSchema,
   tutorResponseSchema,
   wordResponseSchema,
   type AssistAction,
   type ExplainResponse,
+  type Formality,
+  type ScenarioDraft,
+  type ScenarioModelResponse,
   type SimplifyResponse,
   type TranslateResponse,
   type TutorResponse,
   type WordResponse,
 } from "../schemas.js";
 import { buildTutorSystemPrompt, buildTutorRepairPrompt, buildTutorUserTurn } from "../prompts/tutor.js";
+import {
+  buildScenarioRepairPrompt,
+  buildScenarioSystemPrompt,
+  buildScenarioUserPrompt,
+} from "../prompts/scenario.js";
 import {
   buildAssistSystemPrompt,
   buildAssistUserPrompt,
@@ -31,6 +40,114 @@ type Role = "user" | "assistant";
 interface HistoryMessage {
   role: Role;
   content: string;
+}
+
+interface ModelMessage {
+  role: Role;
+  content: string;
+}
+
+/** Keep history alternating (both providers expect it) and cap its length. */
+function normalizeHistory(history: HistoryMessage[]): ModelMessage[] {
+  const normalized: ModelMessage[] = [];
+  for (const item of history.slice(-10)) {
+    const previous = normalized.at(-1);
+    if (previous && previous.role === item.role) {
+      previous.content = `${previous.content}\n${item.content}`;
+    } else {
+      normalized.push({ role: item.role, content: item.content });
+    }
+  }
+  // The current learner message is appended separately.
+  if (normalized.at(-1)?.role === "user") normalized.pop();
+  return normalized;
+}
+
+function buildRepairMessages(
+  messages: ModelMessage[],
+  assistantContent: string,
+  repairInstruction: string,
+): ModelMessage[] {
+  return [
+    ...messages,
+    { role: "assistant", content: assistantContent },
+    { role: "user", content: repairInstruction },
+  ];
+}
+
+/**
+ * Validate model output against the shared Zod contract. Fenced JSON is
+ * accepted, and one repair turn is attempted for empty or malformed output.
+ */
+export async function requestStructuredJson<T>(
+  generate: (messages: ModelMessage[]) => Promise<string>,
+  messages: ModelMessage[],
+  schema: ZodType<T, ZodTypeDef, unknown>,
+  repairInstruction: string,
+): Promise<T> {
+  let requestMessages = messages;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let raw: string;
+    try {
+      raw = (await generate(requestMessages)).trim();
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      console.error(
+        "[ai] Provider request failed:",
+        error instanceof Error ? error.message : "unknown error",
+      );
+      throw new AppError(
+        502,
+        "ai_upstream_error",
+        "The tutor service is temporarily unavailable. Please try again.",
+      );
+    }
+
+    if (!raw) {
+      if (attempt === 0) {
+        requestMessages = buildRepairMessages(
+          messages,
+          "(empty response)",
+          repairInstruction,
+        );
+        continue;
+      }
+      throw new AppError(
+        502,
+        "ai_empty_response",
+        "The tutor could not generate a reply. Please try again.",
+      );
+    }
+
+    try {
+      return schema.parse(parseJsonObject(raw));
+    } catch (error) {
+      console.warn(
+        `[ai] Invalid structured response on attempt ${attempt + 1}:`,
+        error instanceof Error ? error.message : "unknown",
+      );
+      if (attempt === 0) {
+        requestMessages = buildRepairMessages(
+          messages,
+          raw.slice(0, 6_000),
+          repairInstruction,
+        );
+        continue;
+      }
+      throw new AppError(
+        502,
+        "ai_format_error",
+        "The tutor's answer could not be processed. Please try once more.",
+      );
+    }
+  }
+
+  throw new AppError(
+    502,
+    "ai_format_error",
+    "The tutor's answer could not be processed. Please try once more.",
+  );
 }
 
 export interface AiGateway {
@@ -50,89 +167,27 @@ export interface AiGateway {
     dialect: Dialect,
   ): Promise<ExplainResponse | SimplifyResponse | TranslateResponse>;
   word(word: string, context: string, level: Level): Promise<WordResponse>;
+  generateScenario(input: {
+    idea: string;
+    level?: Level;
+    formality?: Formality;
+  }): Promise<ScenarioModelResponse>;
 }
 
-class AnthropicGateway implements AiGateway {
-  readonly mode = "live" as const;
-  private readonly client: Anthropic;
+/**
+ * Shared prompt/schema pipeline used by every live provider. It guarantees
+ * Anthropic and Gemini receive identical system prompts, history windows,
+ * Zod contracts, and repair instructions.
+ */
+abstract class PromptGateway implements AiGateway {
+  abstract readonly mode: "live" | "demo";
 
-  constructor(apiKey: string) {
-    this.client = new Anthropic({
-      apiKey,
-      maxRetries: 1,
-      timeout: 30_000,
-    });
-  }
-
-  private async requestJson<T>(
+  protected abstract requestJson<T>(
     system: string,
-    messages: Anthropic.MessageParam[],
+    messages: ModelMessage[],
     schema: ZodType<T, ZodTypeDef, unknown>,
     repairInstruction: string,
-  ): Promise<T> {
-    let repairMessages = messages;
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await this.client.messages.create({
-        model: config.anthropicModel,
-        max_tokens: 1_800,
-        temperature: 0.45,
-        system,
-        messages: repairMessages,
-      });
-
-      const raw = response.content
-        .filter((block): block is Anthropic.TextBlock => block.type === "text")
-        .map((block) => block.text)
-        .join("\n")
-        .trim();
-
-      if (!raw) {
-        if (attempt === 0) {
-          repairMessages = [
-            ...messages,
-            { role: "assistant", content: "(empty response)" },
-            { role: "user", content: repairInstruction },
-          ];
-          continue;
-        }
-        throw new AppError(
-          502,
-          "ai_empty_response",
-          "The tutor could not generate a reply. Please try again.",
-        );
-      }
-
-      try {
-        const parsed = schema.parse(parseJsonObject(raw));
-        return parsed;
-      } catch (error) {
-        console.warn(
-          `[ai] Invalid structured response on attempt ${attempt + 1}:`,
-          error instanceof Error ? error.message : "unknown",
-        );
-        if (attempt === 0) {
-          repairMessages = [
-            ...messages,
-            { role: "assistant", content: raw.slice(0, 6_000) },
-            { role: "user", content: repairInstruction },
-          ];
-          continue;
-        }
-        throw new AppError(
-          502,
-          "ai_format_error",
-          "The tutor's answer could not be processed. Please try once more.",
-        );
-      }
-    }
-
-    throw new AppError(
-      502,
-      "ai_format_error",
-      "The tutor's answer could not be processed. Please try once more.",
-    );
-  }
+  ): Promise<T>;
 
   async tutor(input: {
     level: Level;
@@ -149,28 +204,10 @@ class AnthropicGateway implements AiGateway {
       scenario: input.scenario,
     });
 
-    // Merge adjacent same-role turns because the Anthropic Messages API
-    // expects an alternating conversation, and truncate overly long history.
-    const normalizedHistory: Anthropic.MessageParam[] = [];
-    for (const item of input.history.slice(-10)) {
-      const previous = normalizedHistory.at(-1);
-      if (previous && previous.role === item.role) {
-        previous.content = `${String(previous.content)}\n${item.content}`;
-      } else {
-        normalizedHistory.push({
-          role: item.role,
-          content: item.content,
-        });
-      }
-    }
-    if (normalizedHistory.at(-1)?.role === "user") {
-      normalizedHistory.pop();
-    }
-
     return this.requestJson(
       system,
       [
-        ...normalizedHistory,
+        ...normalizeHistory(input.history),
         { role: "user", content: buildTutorUserTurn(input.learnerMessage) },
       ],
       tutorResponseSchema,
@@ -185,28 +222,223 @@ class AnthropicGateway implements AiGateway {
     dialect: Dialect,
   ): Promise<ExplainResponse | SimplifyResponse | TranslateResponse> {
     const system = buildAssistSystemPrompt(action, level, dialect);
-    const messages: Anthropic.MessageParam[] = [
+    const messages: ModelMessage[] = [
       { role: "user", content: buildAssistUserPrompt(text) },
     ];
-    const repairInstruction = "Return only the exact JSON shape requested. No markdown.";
+    const repairInstruction =
+      "Return only the exact JSON shape requested. No markdown.";
 
     // Call requestJson per branch so TypeScript can infer each schema's exact
     // output type. A union of Zod schemas would collapse to the first member.
     if (action === "explain") {
-      return this.requestJson(system, messages, explainResponseSchema, repairInstruction);
+      return this.requestJson(
+        system,
+        messages,
+        explainResponseSchema,
+        repairInstruction,
+      );
     }
     if (action === "simplify") {
-      return this.requestJson(system, messages, simplifyResponseSchema, repairInstruction);
+      return this.requestJson(
+        system,
+        messages,
+        simplifyResponseSchema,
+        repairInstruction,
+      );
     }
-    return this.requestJson(system, messages, translateResponseSchema, repairInstruction);
+    return this.requestJson(
+      system,
+      messages,
+      translateResponseSchema,
+      repairInstruction,
+    );
   }
 
-  async word(word: string, context: string, level: Level): Promise<WordResponse> {
+  async word(
+    word: string,
+    context: string,
+    level: Level,
+  ): Promise<WordResponse> {
     return this.requestJson(
       buildWordSystemPrompt(level),
       [{ role: "user", content: buildWordUserPrompt(word, context) }],
       wordResponseSchema,
       "Return only the exact JSON object requested, with article and plural included for nouns. No markdown.",
+    );
+  }
+
+  async generateScenario(input: {
+    idea: string;
+    level?: Level;
+    formality?: Formality;
+  }): Promise<ScenarioModelResponse> {
+    return this.requestJson(
+      buildScenarioSystemPrompt(),
+      [{ role: "user", content: buildScenarioUserPrompt(input) }],
+      scenarioModelResponseSchema,
+      buildScenarioRepairPrompt(),
+    );
+  }
+}
+
+class AnthropicGateway extends PromptGateway {
+  override readonly mode = "live" as const;
+  private readonly client: Anthropic;
+
+  constructor(apiKey: string) {
+    super();
+    this.client = new Anthropic({
+      apiKey,
+      maxRetries: 1,
+      timeout: 30_000,
+    });
+  }
+
+  private async generate(
+    system: string,
+    messages: ModelMessage[],
+  ): Promise<string> {
+    const response = await this.client.messages.create({
+      model: config.anthropicModel,
+      max_tokens: 1_800,
+      temperature: 0.45,
+      system,
+      messages,
+    });
+
+    return response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+  }
+
+  protected override requestJson<T>(
+    system: string,
+    messages: ModelMessage[],
+    schema: ZodType<T, ZodTypeDef, unknown>,
+    repairInstruction: string,
+  ): Promise<T> {
+    return requestStructuredJson(
+      (nextMessages) => this.generate(system, nextMessages),
+      messages,
+      schema,
+      repairInstruction,
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Google Gemini gateway                                              */
+/* ------------------------------------------------------------------ */
+
+interface GeminiGenerateContentResponse {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+  }>;
+  promptFeedback?: { blockReason?: string };
+}
+
+class GeminiGateway extends PromptGateway {
+  override readonly mode = "live" as const;
+  private readonly apiKey: string;
+  private readonly model: string;
+
+  constructor(apiKey: string, model: string) {
+    super();
+    this.apiKey = apiKey;
+    this.model = model;
+  }
+
+  private async generate(
+    system: string,
+    messages: ModelMessage[],
+  ): Promise<string> {
+    let response: Response;
+    try {
+      // The key travels in a header, never in the URL or logs.
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-goog-api-key": this.apiKey,
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: messages.map((message) => ({
+              role: message.role === "assistant" ? "model" : "user",
+              parts: [{ text: message.content }],
+            })),
+            generationConfig: {
+              temperature: 0.45,
+              maxOutputTokens: 1_800,
+              responseMimeType: "application/json",
+            },
+          }),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+    } catch (error) {
+      console.error(
+        "[ai] Gemini request failed:",
+        error instanceof Error ? error.message : "unknown error",
+      );
+      throw new AppError(
+        502,
+        "ai_upstream_error",
+        "The tutor service is temporarily unavailable. Please try again.",
+      );
+    }
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      console.error(
+        `[ai] Gemini returned HTTP ${response.status}: ${detail.slice(0, 500)}`,
+      );
+      throw new AppError(
+        502,
+        "ai_upstream_error",
+        "The tutor service is temporarily unavailable. Please try again.",
+      );
+    }
+
+    const payload = (await response
+      .json()
+      .catch(() => null)) as GeminiGenerateContentResponse | null;
+    if (!payload) {
+      throw new AppError(
+        502,
+        "ai_invalid_response",
+        "The tutor sent an unreadable response. Please try again.",
+      );
+    }
+    if (payload.promptFeedback?.blockReason) {
+      throw new AppError(
+        422,
+        "ai_prompt_blocked",
+        "The tutor could not answer that message. Please try rephrasing it.",
+      );
+    }
+
+    return (payload.candidates?.[0]?.content?.parts ?? [])
+      .map((part) => part.text ?? "")
+      .join("")
+      .trim();
+  }
+
+  protected override requestJson<T>(
+    system: string,
+    messages: ModelMessage[],
+    schema: ZodType<T, ZodTypeDef, unknown>,
+    repairInstruction: string,
+  ): Promise<T> {
+    return requestStructuredJson(
+      (nextMessages) => this.generate(system, nextMessages),
+      messages,
+      schema,
+      repairInstruction,
     );
   }
 }
@@ -444,6 +676,183 @@ export function normalizeDemoCorrection(input: string): {
   return { corrected, mistakes: mistakes.slice(0, 3) };
 }
 
+const demoScenarioRefusalPattern =
+  /\b(?:porn|sex(?:ual)?|nazi|bomb|weapon|kill|murder|suicide|self[- ]?harm|drugs?|heroin|cocaine|hack(?:ing)?|python|javascript|programming|coding)\b|جنس|عاهرة|قنبلة|سلاح|اقتل|انتحار|مخدرات|هيروين|كوكايين|اختراق|برمجة|كود/i;
+
+const demoScenarioRefusalMessage =
+  "الفكرة دي مش مناسبة للتمرين على المحادثة. جرّب موقف يومي زي حجز فندق أو كلام مع دكتور، وأنا أجهّزلك سيناريو حلو.";
+
+/**
+ * Deterministic demo scenarios keep the full creator flow testable without a
+ * provider key. The content is intentionally generic but follows the selected
+ * level and formality.
+ */
+function pickDemoScenario(input: {
+  idea: string;
+  level?: Level;
+  formality?: Formality;
+}): ScenarioDraft {
+  const idea = input.idea.toLowerCase();
+  const level = input.level ?? "A1";
+  const politeSetting = /(hotel|zimmer|reservier|arzt|doctor|schmerz|fندق|فندق|غرفة|حجز|دكتور|ألم|مستشفى|مطعم|restaurant|büro|behörde|amt)/i.test(
+    idea,
+  );
+  const formality: Formality = input.formality ?? (politeSetting ? "Sie" : "du");
+  const du = formality === "du";
+
+  if (/(hotel|zimmer|reservier|فندق|غرفة|حجز|أوضة)/i.test(idea)) {
+    return {
+      title_de: "Zimmer im Hotel buchen",
+      title_ar: "حجز غرفة في فندق",
+      emoji: "🏨",
+      setting_ar:
+        "مكتب استقبال في فندق صغير وهادي في برلين، والموظفة واقفة ورا الكاونتر.",
+      ai_role_de: "freundliche Rezeptionistin in einem kleinen Berliner Hotel",
+      learner_role_ar: "ضيف عايز يحجز غرفة ويستفسر عن السعر والإفطار",
+      goal_ar:
+        "احجز غرفة لليلة أو ليلتين، واسأل عن السعر وموعد الإفطار، واتأكد من طريقة الدفع.",
+      level,
+      formality,
+      grammar_focus: [
+        du ? "du-Form" : "Höflichkeitsform Sie",
+        "möchten + Akkusativ",
+        "Fragen mit was/wie viel",
+      ],
+      key_vocab: [
+        { de: "Zimmer", article: "das", plural: "die Zimmer", ar: "غرفة" },
+        { de: "Nacht", article: "die", plural: "die Nächte", ar: "ليلة" },
+        {
+          de: "Reservierung",
+          article: "die",
+          plural: "die Reservierungen",
+          ar: "حجز",
+        },
+      ],
+      useful_phrases: [
+        {
+          de: du
+            ? "Ich möchte ein Zimmer reservieren."
+            : "Ich möchte ein Zimmer reservieren, bitte.",
+          ar: "عايز أحجز غرفة، لو سمحت.",
+        },
+        { de: "Was kostet die Nacht?", ar: "الليلة بكام؟" },
+      ],
+      opening_message_de: du
+        ? "Hallo! Willkommen im Hotel Sonne. Möchtest du ein Zimmer reservieren?"
+        : "Guten Tag! Willkommen im Hotel Sonne. Möchten Sie ein Zimmer reservieren?",
+      opening_message_ar: du
+        ? "أهلًا! نورت فندق Sonne. تحب تحجز غرفة؟"
+        : "نهارك سعيد! نورت فندق Sonne. تحب تحجز غرفة؟",
+    };
+  }
+
+  if (/(restaurant|essen|bestell|مطعم|أكل|اطلب|عشاء|غدا)/i.test(idea)) {
+    return {
+      title_de: "Im Restaurant bestellen",
+      title_ar: "الطلب في مطعم",
+      emoji: "🍽️",
+      setting_ar: "مطعم مصري صغير في برلين، والجَرْسون جاي ياخد الطلب.",
+      ai_role_de: "freundlicher Kellner in einem kleinen Restaurant",
+      learner_role_ar: "زائر عايز يطلب أكل وشراب ويسأل عن الحساب",
+      goal_ar: "اطلب أكلة وشراب، واسأل عن المكونات، واطلب الحساب في الآخر.",
+      level,
+      formality,
+      grammar_focus: [
+        du ? "du-Form" : "Höflichkeitsform Sie",
+        "Akkusativ",
+        "möchten + Akkusativ",
+      ],
+      key_vocab: [
+        { de: "Gericht", article: "das", plural: "die Gerichte", ar: "طبق" },
+        { de: "Getränk", article: "das", plural: "die Getränke", ar: "مشروب" },
+        { de: "Rechnung", article: "die", plural: "die Rechnungen", ar: "الفاتورة" },
+      ],
+      useful_phrases: [
+        { de: "Ich möchte … bestellen.", ar: "عايز أطلب …" },
+        { de: "Die Rechnung, bitte.", ar: "الحساب، لو سمحت." },
+      ],
+      opening_message_de: du
+        ? "Hallo! Willkommen im Restaurant. Möchtest du etwas bestellen?"
+        : "Guten Abend! Willkommen im Restaurant. Möchten Sie etwas bestellen?",
+      opening_message_ar: du
+        ? "أهلًا! نورت المطعم. تحب تطلب حاجة؟"
+        : "مساء الخير! نورت المطعم. تحب تطلب حاجة؟",
+    };
+  }
+
+  if (/(arzt|doctor|schmerz|krank|دكتور|ألم|مستشفى|تعبان|مرض)/i.test(idea)) {
+    return {
+      title_de: "Beim Arzt",
+      title_ar: "عند الدكتور",
+      emoji: "🩺",
+      setting_ar: "عيادة دكتور عام في برلين، والدكتور بيسأل عن الأعراض.",
+      ai_role_de: "ruhige Hausärztin in einer Berliner Praxis",
+      learner_role_ar: "مريض عايز يوصف الأعراض ويسأل عن العلاج",
+      goal_ar: "اوصف الأعراض ومدة الألم، واسأل عن الدوا ولو محتاج شهادة مرضية.",
+      level,
+      formality,
+      grammar_focus: [
+        du ? "du-Form" : "Höflichkeitsform Sie",
+        "seit + Dativ",
+        "Perfekt",
+      ],
+      key_vocab: [
+        { de: "Schmerzen", article: "die", plural: "die Schmerzen", ar: "ألم" },
+        { de: "Fieber", article: "das", plural: null, ar: "سخونية" },
+        {
+          de: "Krankmeldung",
+          article: "die",
+          plural: "die Krankmeldungen",
+          ar: "شهادة مرضية",
+        },
+      ],
+      useful_phrases: [
+        { de: "Ich habe seit … Schmerzen.", ar: "عندي ألم من …" },
+        { de: "Brauche ich ein Medikament?", ar: "محتاج دوا؟" },
+      ],
+      opening_message_de: du
+        ? "Hallo. Was fehlt dir denn? Wo tut es weh?"
+        : "Guten Tag. Was fehlt Ihnen denn? Wo tut es weh?",
+      opening_message_ar: du
+        ? "أهلًا. مالك؟ فيه إيه؟"
+        : "نهارك سعيد. حضرتك مالك؟ الألم فين؟",
+    };
+  }
+
+  return {
+    title_de: "Im Alltag ins Gespräch kommen",
+    title_ar: "كلام في الحياة اليومية",
+    emoji: "💬",
+    setting_ar:
+      "قعدة بسيطة مع شخص ودود في حي سكني في برلين، والكلام عن اليوم والخطة الجاية.",
+    ai_role_de: "freundliche Nachbarin, die ein kurzes Alltagsgespräch führt",
+    learner_role_ar: "جار جديد عايز يتكلم عن يومه وخططه",
+    goal_ar: "اتكلم عن يومك، واسأل عن يوم الطرف التاني، واقترح حاجة نعملها.",
+    level,
+    formality,
+    grammar_focus: [
+      du ? "du-Form" : "Höflichkeitsform Sie",
+      "W-Fragen",
+      "Verb an Position 2",
+    ],
+    key_vocab: [
+      { de: "Tag", article: "der", plural: "die Tage", ar: "يوم" },
+      { de: "Wochenende", article: "das", plural: "die Wochenenden", ar: "آخر الأسبوع" },
+      { de: "Idee", article: "die", plural: "die Ideen", ar: "فكرة" },
+    ],
+    useful_phrases: [
+      { de: "Wie war dein Tag?", ar: "يومك كان إيه؟" },
+      { de: "Hast du Lust, …?", ar: "تحب …؟" },
+    ],
+    opening_message_de: du
+      ? "Hallo! Schön, dich zu sehen. Wie war dein Tag?"
+      : "Guten Tag! Schön, Sie zu sehen. Wie war Ihr Tag?",
+    opening_message_ar: du
+      ? "أهلًا! حلو إننا شوفناك. يومك كان إيه؟"
+      : "نهارك سعيد! حلو إننا شوفناك. يوم حضرتك كان إيه؟",
+  };
+}
+
 class DemoGateway implements AiGateway {
   readonly mode = "demo" as const;
 
@@ -455,14 +864,81 @@ class DemoGateway implements AiGateway {
     history: HistoryMessage[];
     scenario: ApiScenario;
   }): Promise<TutorResponse> {
-    const turns = demoReplies[input.scenario.id] ?? demoReplies.cafe ?? [];
     const assistantTurns = input.history.filter((item) => item.role === "assistant").length;
+    const { corrected, mistakes } = normalizeDemoCorrection(input.learnerMessage);
+    const correction = {
+      corrected,
+      mistakes,
+      praise_ar:
+        mistakes.length > 0
+          ? praiseOptions[0] ?? "حلو إنك حاولت!"
+          : `${praiseOptions[2] ?? "مجهود جميل!"} ومفيش أخطاء أساسية في الجملة دي.`,
+    };
+
+    // Custom scenarios have no canned per-id replies. Keep the demo flow
+    // deterministic while still respecting the learner's chosen formality.
+    if (input.scenario.id === "custom") {
+      const du = input.scenario.formality === "du";
+      const customTurns = du
+        ? [
+            {
+              reply_de:
+                "Danke für deine Nachricht! Das passt gut. Was möchtest du jetzt machen?",
+              question_de: "Was möchtest du jetzt machen?",
+              translation_ar:
+                "شكرًا على رسالتك! ده مناسب للسياق. تحب تعمل إيه دلوقتي؟",
+            },
+            {
+              reply_de: "Verstehe. Möchtest du noch etwas dazu sagen?",
+              question_de: "Möchtest du noch etwas dazu sagen?",
+              translation_ar: "فاهمة. تحب تقول حاجة تانية عن الموضوع؟",
+            },
+            {
+              reply_de: "Gut gemacht! Was möchtest du als Nächstes üben?",
+              question_de: "Was möchtest du als Nächstes üben?",
+              translation_ar: "عملت كويس! تحب تتدرب على إيه بعد كده؟",
+            },
+          ]
+        : [
+            {
+              reply_de:
+                "Danke für Ihre Nachricht! Das passt gut. Was möchten Sie jetzt machen?",
+              question_de: "Was möchten Sie jetzt machen?",
+              translation_ar:
+                "شكرًا على رسالتك! ده مناسب للسياق. تحب تعمل إيه دلوقتي؟",
+            },
+            {
+              reply_de: "Verstehe. Möchten Sie noch etwas dazu sagen?",
+              question_de: "Möchten Sie noch etwas dazu sagen?",
+              translation_ar: "فاهمة. تحب تقول حاجة تانية عن الموضوع؟",
+            },
+            {
+              reply_de: "Gut gemacht! Was möchten Sie als Nächstes üben?",
+              question_de: "Was möchten Sie als Nächstes üben?",
+              translation_ar: "عملت كويس! تحب تتدرب على إيه بعد كده؟",
+            },
+          ];
+      const chosen = customTurns[assistantTurns % customTurns.length] ?? customTurns[0]!;
+      const safeSuffix =
+        input.safeMode && input.level !== "A1" ? " (سنكلم بهدوء أكثر)" : "";
+
+      return {
+        reply_de: chosen.reply_de,
+        translation_ar: chosen.translation_ar + safeSuffix,
+        correction: {
+          ...correction,
+          follow_up_question_de: chosen.question_de,
+        },
+        vocabulary: [],
+      };
+    }
+
+    const turns = demoReplies[input.scenario.id] ?? demoReplies.cafe ?? [];
     const chosen = turns[assistantTurns % Math.max(1, turns.length)] ?? turns[0];
     if (!chosen) {
       throw new AppError(500, "demo_missing", "Demo scenario is unavailable.");
     }
 
-    const { corrected, mistakes } = normalizeDemoCorrection(input.learnerMessage);
     const safeSuffix =
       input.safeMode && input.level !== "A1" ? " (سنكلم بهدوء أكثر)" : "";
 
@@ -470,12 +946,7 @@ class DemoGateway implements AiGateway {
       reply_de: chosen.reply_de,
       translation_ar: chosen.translation_ar + safeSuffix,
       correction: {
-        corrected,
-        mistakes,
-        praise_ar:
-          mistakes.length > 0
-            ? praiseOptions[0] ?? "حلو إنك حاولت!"
-            : `${praiseOptions[2] ?? "مجهود جميل!"} ومفيش أخطاء أساسية في الجملة دي.`,
+        ...correction,
         follow_up_question_de: chosen.question_de,
       },
       vocabulary: (demoVocabulary[input.scenario.id] ?? []).slice(0, 2),
@@ -491,7 +962,7 @@ class DemoGateway implements AiGateway {
     if (action === "explain") {
       return {
         explanation_ar:
-          "إحنا في الوضع التجريبي، فالشرح الدقيق للجملة دي مش متاح. لما يتضاف مفتاح Claude، هنا هتلاقي شرح مبني على الجملة نفسها مع مقارنة بالعربي.",
+          "إحنا في الوضع التجريبي، فالشرح الدقيق للجملة دي مش متاح. لما يتظبط مزوّد الذكاء الاصطناعي، هنا هتلاقي شرح مبني على الجملة نفسها مع مقارنة بالعربي.",
         examples: [
           { de: "Das ist ein Beispiel.", ar: "دي مثال." },
           { de: "Der Satz ist einfach.", ar: "الجملة بسيطة." },
@@ -507,7 +978,7 @@ class DemoGateway implements AiGateway {
     }
     return {
       translation_ar:
-        "الترجمة الدقيقة مش متاحة في الوضع التجريبي. فعّل Claude وهتلاقي ترجمة طبيعية بالعربي المصري.",
+        "الترجمة الدقيقة مش متاحة في الوضع التجريبي. فعّل مزوّد الذكاء الاصطناعي وهتلاقي ترجمة طبيعية بالعربي المصري.",
     };
   }
 
@@ -519,12 +990,23 @@ class DemoGateway implements AiGateway {
         plural: null,
         part_of_speech: "Demo",
         meaning_ar:
-          "الوضع التجريبي مش بيدّي معنى دقيق. فعّل مفتاح Anthropic عشان تشوف المعنى والأداة والجمع.",
+          "الوضع التجريبي مش بيدّي معنى دقيق. فعّل مزوّد الذكاء الاصطناعي عشان تشوف المعنى والأداة والجمع.",
         meaning_en: "Precise dictionary lookup is unavailable in demo mode.",
         example_de: "Im Demo-Modus gibt es kein Wörterbuch.",
         example_ar: "في الوضع التجريبي مفيش قاموس دقيق.",
       } satisfies WordResponse
     );
+  }
+
+  async generateScenario(input: {
+    idea: string;
+    level?: Level;
+    formality?: Formality;
+  }): Promise<ScenarioModelResponse> {
+    if (demoScenarioRefusalPattern.test(input.idea)) {
+      return { refused_ar: demoScenarioRefusalMessage };
+    }
+    return pickDemoScenario(input);
   }
 }
 
@@ -532,10 +1014,13 @@ let gateway: AiGateway | null = null;
 
 export function getAiGateway(): AiGateway {
   if (gateway) return gateway;
-  if (config.aiMode === "live") {
-    gateway = new AnthropicGateway(config.anthropicApiKey);
-  } else if (config.aiMode === "demo") {
+  if (config.aiMode === "demo") {
     gateway = new DemoGateway();
+  } else if (config.aiMode === "live") {
+    gateway =
+      config.aiProvider === "gemini"
+        ? new GeminiGateway(config.geminiApiKey, config.geminiModel)
+        : new AnthropicGateway(config.anthropicApiKey);
   } else {
     throw new AppError(
       503,

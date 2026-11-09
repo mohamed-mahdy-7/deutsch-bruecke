@@ -87,7 +87,10 @@ create table if not exists public.conversations (
   id text primary key,
   user_id uuid not null references auth.users (id) on delete cascade,
   scenario_id text not null
-    check (scenario_id in ('cafe', 'doctor', 'interview', 'office', 'shopping')),
+    check (
+      scenario_id in ('cafe', 'doctor', 'interview', 'office', 'shopping')
+      or scenario_id ~ '^custom_[A-Za-z0-9_-]+$'
+    ),
   started_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

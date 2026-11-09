@@ -16,7 +16,9 @@ import {
 } from "lucide-react";
 import { SCENARIOS, getScenario } from "@/data/scenarios";
 import { useAppPreferences } from "@/state/useAppPreferences";
+import { useCustomScenarios } from "@/state/CustomScenariosProvider";
 import { useProgress, useTodayActivity } from "@/state/ProgressProvider";
+import { customScenarioToScenario } from "@/services/customScenarioMapping";
 import { dueCards } from "@/lib/srs";
 import { sortWeakSpots } from "@/lib/adaptive";
 import { LEVEL_LABEL_KEY, weakSpotHref } from "@/lib/uiLabels";
@@ -33,6 +35,7 @@ import { GrammarLegend } from "@/components/german/GrammarLegend";
 export function DashboardPage() {
   const { t, language } = useAppPreferences();
   const { progress } = useProgress();
+  const { getScenario: getCustomScenario } = useCustomScenarios();
   const today = useTodayActivity();
 
   if (!progress) return null;
@@ -51,7 +54,11 @@ export function DashboardPage() {
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
   )[0];
   const resumeScenario = latestConversation
-    ? getScenario(latestConversation.scenarioId)
+    ? getScenario(latestConversation.scenarioId) ??
+      (() => {
+        const custom = getCustomScenario(latestConversation.scenarioId);
+        return custom ? customScenarioToScenario(custom) : undefined;
+      })()
     : undefined;
   const nextScenario =
     resumeScenario ??

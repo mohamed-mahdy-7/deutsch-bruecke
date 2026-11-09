@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractJsonObject, parseJsonObject } from "./json.js";
+import {
+  extractJsonObject,
+  parseJsonObject,
+  stripMarkdownFences,
+} from "./json.js";
 
 describe("extractJsonObject", () => {
   it("extracts JSON from fenced model output", () => {
@@ -24,5 +28,25 @@ describe("extractJsonObject", () => {
 
   it("returns null when no object exists", () => {
     expect(extractJsonObject("Kein JSON hier.")).toBeNull();
+  });
+});
+
+describe("stripMarkdownFences", () => {
+  it("removes a json code fence", () => {
+    expect(stripMarkdownFences('```json\n{"ok":true}\n```')).toBe(
+      '{"ok":true}',
+    );
+  });
+
+  it("removes an unlabelled code fence", () => {
+    expect(stripMarkdownFences('```\n{"ok":true}\n```')).toBe('{"ok":true}');
+  });
+
+  it("handles an unclosed fence from a truncated response", () => {
+    expect(stripMarkdownFences('```json\n{"ok":true}')).toBe('{"ok":true}');
+  });
+
+  it("leaves plain JSON untouched", () => {
+    expect(stripMarkdownFences('{"ok":true}')).toBe('{"ok":true}');
   });
 });

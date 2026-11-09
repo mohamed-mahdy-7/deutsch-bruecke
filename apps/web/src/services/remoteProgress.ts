@@ -173,7 +173,9 @@ function asUiLanguage(value: string | null | undefined): UiLanguage {
 }
 
 function asScenario(value: string): ScenarioId {
-  return SCENARIOS.has(value as ScenarioId) ? (value as ScenarioId) : "cafe";
+  if (SCENARIOS.has(value as ScenarioId)) return value as ScenarioId;
+  if (/^custom_[A-Za-z0-9_-]+$/.test(value)) return value as ScenarioId;
+  return "cafe";
 }
 
 function asDate(value: string | null | undefined, fallback: string): string {

@@ -4,6 +4,7 @@ import { ErrorBoundary } from "@/components/layout/ErrorBoundary";
 import { SettingsProvider, useSettings } from "@/providers/SettingsProvider";
 import { AuthProvider } from "@/state/AuthProvider";
 import { ProgressProvider, useProgress } from "@/state/ProgressProvider";
+import { CustomScenariosProvider } from "@/state/CustomScenariosProvider";
 import { ScrollToTop } from "@/components/layout/ScrollToTop";
 import { PwaManager } from "@/components/layout/PwaManager";
 import { RequireApp, RequireOnboarding, RootRoute } from "@/components/layout/RouteGates";
@@ -12,6 +13,7 @@ import { OnboardingPage } from "@/pages/OnboardingPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { TutorPage } from "@/pages/TutorPage";
 import { TutorSessionPage } from "@/pages/TutorSessionPage";
+import { CustomScenarioPage } from "@/pages/CustomScenarioPage";
 import { GrammarPage } from "@/pages/GrammarPage";
 import { BuilderPage } from "@/pages/BuilderPage";
 import { VocabularyPage } from "@/pages/VocabularyPage";
@@ -42,11 +44,12 @@ export function App() {
       <SettingsProvider>
         <AuthProvider>
           <ProgressProvider>
-            <ProfilePreferenceBridge />
-            <BrowserRouter>
-              <ScrollToTop />
-              <PwaManager />
-              <Routes>
+            <CustomScenariosProvider>
+              <ProfilePreferenceBridge />
+              <BrowserRouter>
+                <ScrollToTop />
+                <PwaManager />
+                <Routes>
                 <Route path="/" element={<RootRoute />} />
                 <Route path="/auth" element={<AuthPage />} />
 
@@ -57,6 +60,14 @@ export function App() {
                 <Route element={<RequireApp />}>
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/tutor" element={<TutorPage />} />
+                  <Route
+                    path="/tutor/create"
+                    element={<CustomScenarioPage />}
+                  />
+                  <Route
+                    path="/tutor/create/:scenarioId"
+                    element={<CustomScenarioPage />}
+                  />
                   <Route
                     path="/tutor/:scenarioId"
                     element={<TutorSessionPage />}
@@ -72,8 +83,9 @@ export function App() {
                   <Route path="/profile" element={<ProfilePage />} />
                   <Route path="*" element={<NotFoundPage />} />
                 </Route>
-              </Routes>
-            </BrowserRouter>
+                </Routes>
+              </BrowserRouter>
+            </CustomScenariosProvider>
           </ProgressProvider>
         </AuthProvider>
       </SettingsProvider>

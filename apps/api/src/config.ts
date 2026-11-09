@@ -25,17 +25,62 @@ function intFromEnv(value: string | undefined, fallback: number): number {
 }
 
 const nodeEnv = process.env.NODE_ENV ?? "development";
-const apiKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
+const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
+const geminiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
 const demoRequested = process.env.AI_DEMO_MODE === "true";
 
-/** Never fall silently into demo mode in production. */
-export const aiMode: "live" | "demo" | "unavailable" = demoRequested
+export type AiProvider = "anthropic" | "gemini" | "demo";
+
+const providerFromEnv = process.env.AI_PROVIDER?.trim().toLowerCase();
+const explicitProvider: AiProvider | null =
+  providerFromEnv === "anthropic" ||
+  providerFromEnv === "gemini" ||
+  providerFromEnv === "demo"
+    ? providerFromEnv
+    : null;
+
+if (providerFromEnv && !explicitProvider) {
+  console.warn(
+    `[deutsch-bruecke] Ignoring unknown AI_PROVIDER="${providerFromEnv}". Expected anthropic, gemini, or demo.`,
+  );
+}
+
+const autoProvider: AiProvider = anthropicKey
+  ? "anthropic"
+  : geminiKey
+    ? "gemini"
+    : "anthropic";
+
+// AI_DEMO_MODE remains a hard safety override so local UI work never calls a
+// paid API by accident, even if AI_PROVIDER names a live provider.
+const selectedProvider: AiProvider = demoRequested
   ? "demo"
-  : apiKey
-    ? "live"
-    : nodeEnv !== "production"
-      ? "demo"
-      : "unavailable";
+  : explicitProvider ?? autoProvider;
+
+function providerKey(provider: AiProvider): string {
+  if (provider === "anthropic") return anthropicKey;
+  if (provider === "gemini") return geminiKey;
+  return "";
+}
+
+let aiProvider: AiProvider = selectedProvider;
+let aiMode: "live" | "demo" | "unavailable";
+
+if (selectedProvider === "demo") {
+  aiMode = "demo";
+} else if (providerKey(selectedProvider)) {
+  aiMode = "live";
+} else if (nodeEnv !== "production") {
+  if (explicitProvider) {
+    console.warn(
+      `[deutsch-bruecke] AI_PROVIDER=${selectedProvider} has no matching API key; using the demo gateway in development.`,
+    );
+  }
+  aiProvider = "demo";
+  aiMode = "demo";
+} else {
+  aiMode = "unavailable";
+}
 
 export const config = {
   nodeEnv,
@@ -45,9 +90,13 @@ export const config = {
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean),
-  anthropicApiKey: apiKey,
+  anthropicApiKey: anthropicKey,
   anthropicModel:
     process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-5-20250929",
+  geminiApiKey: geminiKey,
+  geminiModel:
+    process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash",
+  aiProvider,
   aiMode,
   trustProxy: process.env.TRUST_PROXY === "1",
   rateLimits: {
@@ -64,13 +113,20 @@ export const config = {
       windowMs: intFromEnv(process.env.WORD_RATE_WINDOW_MINUTES, 15) * 60_000,
       max: intFromEnv(process.env.WORD_RATE_MAX, 150),
     },
+    scenario: {
+      windowMs:
+        intFromEnv(process.env.SCENARIO_RATE_WINDOW_MINUTES, 15) * 60_000,
+      max: intFromEnv(process.env.SCENARIO_RATE_MAX, 20),
+    },
   },
 } as const;
 
 if (config.isProduction && aiMode === "unavailable") {
   // Keep the HTTP server healthy so /api/health can be used by orchestrators,
   // but make the misconfiguration obvious in logs.
+  const expectedKey =
+    aiProvider === "gemini" ? "GEMINI_API_KEY" : "ANTHROPIC_API_KEY";
   console.warn(
-    "[deutsch-bruecke] ANTHROPIC_API_KEY is missing in production. AI routes will return 503.",
+    `[deutsch-bruecke] ${expectedKey} is missing for AI_PROVIDER=${aiProvider} in production. AI routes will return 503.`,
   );
 }

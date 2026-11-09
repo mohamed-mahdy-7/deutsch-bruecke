@@ -37,7 +37,8 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 ### Learning flow
 
 - **Onboarding and placement** — name, daily goal, Arabic dialect preference, and a five-question adaptive placement check that recommends A1, A2, or B1. The placement can be retaken from the profile without losing progress.
-- **AI role-play tutor** — five scenarios: café, doctor, job interview, Bürgeramt, and clothes shopping. Each scenario has a fixed server-side persona, level, setting, and goals. Conversations can be resumed or restarted explicitly.
+- **AI role-play tutor** — five built-in scenarios: café, doctor, job interview, Bürgeramt, and clothes shopping. Each scenario has a fixed server-side persona, level, setting, goals, formality, and key vocabulary. Conversations can be resumed or restarted explicitly.
+- **AI custom-conversation creator** — describe any everyday situation in Arabic, Egyptian dialect, German, or a mix. Choose an optional CEFR level, `du`/`Sie`, and a friendly or stricter tone. Every generated field is editable in the preview; regenerate, discard, or save and start chatting immediately. Saved scenarios carry an **AI-made** badge and can be edited, duplicated, or deleted. Guests keep them locally; signed-in learners sync them through Supabase.
 - **Gentle corrections** — every learner turn receives a corrected German sentence, at most 2–3 focused mistakes, a specific Arabic praise line, and a natural follow-up question. Arabic explanations focus on *why*, with Arabic–German contrasts where useful.
 - **Safe mode** — a per-session toggle that asks the tutor for shorter, slower, idiom-free German.
 - **Speech support** — German text can be spoken with the Web Speech API (`de-DE`), and supported browsers can dictate learner turns.
@@ -71,7 +72,7 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 | Validation | Zod on both client and server |
 | PWA | `vite-plugin-pwa`, Workbox, generated PNG/SVG icons |
 | Backend | Node.js, Express 4, TypeScript, `tsx` in development |
-| AI | Anthropic Claude via `@anthropic-ai/sdk`, server-side only |
+| AI | Anthropic Claude or Google Gemini, server-side only |
 | Auth and sync | Supabase Auth + Postgres with Row Level Security (optional) |
 | Testing | Vitest (unit tests for API JSON parsing, SRS, adaptive selection, German segmentation) |
 | Tooling | npm workspaces, concurrently |
@@ -91,11 +92,12 @@ Requirements: **Node.js 20 or newer** and npm 10 or newer.
 │   │       ├── config.ts         # env loading and AI mode
 │   │       ├── index.ts          # server bootstrap and shutdown
 │   │       ├── schemas.ts        # Zod request/response contracts
-│   │       ├── data/scenarios.ts # server-owned scenario allow-list
+│   │       ├── data/scenarios.ts # built-in allow-list + custom scenario mapper
 │   │       ├── lib/              # JSON extraction, errors, HTTP helpers
 │   │       ├── middleware/       # JSON-aware rate limiter
-│   │       ├── prompts/          # tutor, assist, word prompts
-│   │       └── services/ai.ts    # Anthropic gateway + explicit demo gateway
+│   │       ├── prompts/          # tutor, assist, word, and scenario prompts
+│   │       ├── services/ai.ts    # Anthropic, Gemini, and demo gateways
+│   │       └── services/scenarioCache.ts # normalized cache + in-flight dedupe
 │   └── web                       # React PWA
 │       ├── public/               # icons, favicon
 │       ├── scripts/              # reproducible icon generation
@@ -112,7 +114,9 @@ Requirements: **Node.js 20 or newer** and npm 10 or newer.
 │           ├── styles/           # Tailwind layers and design tokens
 │           └── types/            # canonical domain model
 ├── supabase
-│   └── migrations/001_initial.sql
+│   └── migrations
+│       ├── 001_initial.sql
+│       └── 002_custom_scenarios.sql
 ├── .env.example
 └── package.json                  # npm workspaces and root scripts
 ```
@@ -141,7 +145,7 @@ cp .env.example .env
 Copy-Item .env.example .env
 ```
 
-For a first run, the only optional value is `ANTHROPIC_API_KEY`. Without it, development automatically uses the labelled demo tutor. Everything else works as a guest without Supabase.
+For a first run, the only optional value is an AI key (`ANTHROPIC_API_KEY` or `GEMINI_API_KEY`). Without one, development automatically uses the labelled demo tutor. Everything else works as a guest without Supabase.
 
 ### 3. Start both apps
 
@@ -171,51 +175,76 @@ The preview server also proxies `/api` to port 8787.
 
 ## Environment variables
 
-All values live in a single root `.env` file. The API loads it with `dotenv`; Vite reads it with `envDir: "../../"`. `VITE_*` values are embedded into the browser bundle at build time, so **never put the Anthropic key in a `VITE_*` variable**.
+All values live in a single root `.env` file. The API loads it with `dotenv`; Vite reads it with `envDir: "../../"`. `VITE_*` values are embedded into the browser bundle at build time, so **never put an AI provider key in a `VITE_*` variable**.
 
 | Variable | Default | Used by | Purpose |
 | --- | --- | --- | --- |
 | `VITE_API_BASE_URL` | `/api` | Web | API base URL. Keep relative when a reverse proxy serves `/api`. |
 | `VITE_SUPABASE_URL` | empty | Web | Supabase project URL. Leave empty for guest-only mode. |
 | `VITE_SUPABASE_ANON_KEY` | empty | Web | Supabase anon/publishable key. Safe to expose; RLS enforces access. |
-| `NODE_ENV` | `development` | API | Enables production safeguards. |
+| `NODE_ENV` | `development` | API, Web build | Enables production safeguards. Avoid storing it in the shared `.env`: Vite reads the same file, so `development` would downgrade builds (the web build script now forces `production`). Set it in the host environment instead. |
 | `PORT` | `8787` | API | API listening port. |
 | `CLIENT_ORIGIN` | `http://localhost:5173` | API | Allowed CORS origins, comma-separated. |
+| `AI_PROVIDER` | auto | API | `anthropic`, `gemini`, or `demo`. Unset auto-selects from the available keys. |
 | `ANTHROPIC_API_KEY` | empty | API | Server-only Claude credential. |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-5-20250929` | API | Claude model ID. |
-| `AI_DEMO_MODE` | `false` | API | Forces the demo gateway when `true`. Never use publicly in production. |
+| `GEMINI_API_KEY` | empty | API | Server-only Google Gemini credential. |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | API | Gemini model ID. |
+| `AI_DEMO_MODE` | `false` | API | Hard override to the demo gateway when `true`. Never use publicly in production. |
 | `CHAT_RATE_WINDOW_MINUTES` | `15` | API | Chat rate-limit window. |
 | `CHAT_RATE_MAX` | `30` | API | Chat requests per IP per window. |
 | `ASSIST_RATE_WINDOW_MINUTES` | `15` | API | Assist rate-limit window. |
 | `ASSIST_RATE_MAX` | `60` | API | Assist requests per IP per window. |
 | `WORD_RATE_WINDOW_MINUTES` | `15` | API | Word-lookup rate-limit window. |
 | `WORD_RATE_MAX` | `150` | API | Word lookups per IP per window. |
+| `SCENARIO_RATE_WINDOW_MINUTES` | `15` | API | AI scenario-generation rate-limit window. |
+| `SCENARIO_RATE_MAX` | `20` | API | Scenario generations per IP per window. Each cache miss can call the AI provider. |
 | `TRUST_PROXY` | `0` | API | Set to `1` only behind a trusted reverse proxy so rate limits use the real client IP. |
 
 Restart the dev server after changing `.env` or Vite values.
 
+`npm run build` forces `NODE_ENV=production` for Vite, so a local `NODE_ENV=development` in `.env` cannot downgrade the production web bundle. Set `NODE_ENV=production` in the shell or host environment when running the API in production.
+
 ---
 
-## AI modes and safeguards
+## AI providers, modes, and safeguards
+
+Select the AI backend with `AI_PROVIDER=anthropic | gemini | demo`. When it is unset, the API prefers Anthropic, then Gemini, then falls back to the demo tutor in development. `AI_DEMO_MODE=true` always wins, so local UI work never calls a paid API by accident.
+
+Both live gateways reuse the same system prompts, Zod schemas, history window, and one-shot JSON repair path. `/api/health` reports the active gateway:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "status": "ok",
+    "ai": "live",
+    "provider": "gemini",
+    "timestamp": "2026-01-01T00:00:00.000Z"
+  }
+}
+```
 
 The API has three explicit modes:
 
 | Mode | When | Behaviour |
 | --- | --- | --- |
-| `live` | `ANTHROPIC_API_KEY` set and `AI_DEMO_MODE` is not `true` | Calls Claude using the configured model. |
-| `demo` | No key **and** `NODE_ENV !== production`, or `AI_DEMO_MODE=true` | Deterministic local replies, corrections, and word fallbacks. The UI labels these responses as demo. |
-| `unavailable` | `NODE_ENV=production` and no key | AI routes return `503 ai_not_configured`; the rest of the app remains usable. |
+| `live` | The selected provider has its API key and `AI_DEMO_MODE` is not `true` | Calls Claude or Gemini using the configured model. |
+| `demo` | `AI_DEMO_MODE=true`, `AI_PROVIDER=demo`, or no usable key in development | Deterministic local replies, corrections, and word fallbacks. The UI labels these responses as demo. |
+| `unavailable` | `NODE_ENV=production` and the selected provider has no key | AI routes return `503 ai_not_configured`; the rest of the app remains usable. |
 
 The server never silently enables demo mode in production.
 
 ### Server-side protections
 
-- The Anthropic key is read only by the API and never sent to the browser.
-- The browser sends a scenario **ID**; the server owns the scenario allow-list and prompts.
+- AI provider keys (Anthropic, Gemini) are read only by the API and never sent to the browser.
+- The browser sends a built-in scenario **ID**; the server owns the built-in personas and prompts. Custom scenarios are sent as a fully validated contract and are treated strictly as learning data, never as instructions.
+- Scenario ideas are escaped inside an XML data block, length-limited, and validated before reaching the provider. The prompt refuses unsafe or off-topic ideas with a warm Arabic message (`422 scenario_refused`).
+- Generated scenarios are cached by normalized idea + level + formality + tone. Identical in-flight requests share one provider call; `forceRegenerate` skips completed cache reads but still joins an in-flight identical call.
 - Every request body is validated with Zod and capped at 32 kB.
-- Responses are validated again and repaired once if the model returns malformed JSON.
+- Responses are validated against Zod; Markdown fences are stripped and malformed output gets one repair attempt.
 - `helmet` sets security headers; CORS is an explicit allow-list.
-- JSON-aware rate limiters protect chat, assist, and word routes per IP.
+- JSON-aware rate limiters protect chat, assist, word, and scenario-generation routes per IP.
 - Errors are normalised into a stable envelope; internal errors are logged, not leaked.
 - The tutor prompt treats learner text and history as untrusted data and refuses prompt-extraction and off-topic requests.
 - Conversation history is limited to 12 items by the request schema and trimmed again before the Anthropic call.
@@ -258,6 +287,34 @@ The server never silently enables demo mode in production.
 
 Mistakes are capped at three, vocabulary suggestions at three, and German reply length at 1,200 characters.
 
+`POST /api/scenarios/generate` returns a validated, fully editable scenario:
+
+```json
+{
+  "title_de": "Zimmer im Hotel buchen",
+  "title_ar": "حجز غرفة في فندق",
+  "emoji": "🏨",
+  "setting_ar": "مكتب استقبال في فندق صغير في برلين.",
+  "ai_role_de": "freundliche Rezeptionistin in einem kleinen Hotel",
+  "learner_role_ar": "ضيف عايز يحجز غرفة",
+  "goal_ar": "احجز غرفة واسأل عن السعر.",
+  "level": "A2",
+  "formality": "Sie",
+  "tone": "friendly",
+  "grammar_focus": ["Höflichkeitsform Sie", "Akkusativ"],
+  "key_vocab": [
+    { "de": "Zimmer", "article": "das", "plural": "die Zimmer", "ar": "غرفة" }
+  ],
+  "useful_phrases": [
+    { "de": "Ich möchte ein Zimmer reservieren.", "ar": "عايز أحجز غرفة." }
+  ],
+  "opening_message_de": "Guten Tag! Möchten Sie ein Zimmer reservieren?",
+  "opening_message_ar": "نهارك سعيد! تحب تحجز غرفة؟"
+}
+```
+
+The response `meta` includes `mode` and `cached`. A safety refusal is `422` with `error.code = "scenario_refused"` and the Arabic refusal in `error.message`.
+
 ---
 
 ## Supabase setup (optional)
@@ -270,9 +327,9 @@ Create a project at [supabase.com](https://supabase.com). Note the project URL a
 
 ### 2. Run the migration
 
-Open the Supabase **SQL Editor**, paste the contents of [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql), and run it.
+Open the Supabase **SQL Editor**, paste the contents of [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql), run it, then repeat with [`supabase/migrations/002_custom_scenarios.sql`](supabase/migrations/002_custom_scenarios.sql). Fresh projects run both in order; existing projects only need `002`.
 
-The migration creates:
+The migrations create:
 
 | Table | Purpose |
 | --- | --- |
@@ -285,6 +342,7 @@ The migration creates:
 | `corrections` | One correction bundle per learner message |
 | `daily_activity` | XP and active seconds per local date |
 | `streaks` | Current/longest streak and last practice date |
+| `custom_scenarios` | Learner-generated scenarios stored as validated JSONB (`data`) plus timestamps |
 
 It also adds indexes, check constraints, foreign keys with cascade deletes, RLS policies scoped to `auth.uid()`, and revokes anonymous access.
 
@@ -318,9 +376,11 @@ Restart `npm run dev`. The auth page now offers email and Google sign-in. Withou
 ### Sync semantics
 
 - Guest progress is stored in `localStorage` under `deutsch-bruecke:progress:v1`.
+- Guest custom scenarios are stored per owner under `deutsch-bruecke:custom-scenarios:v1:<ownerId>`.
 - Preferences live under `deutsch-bruecke:preferences:v1`.
-- Signing in with a guest state promotes that state into the account when no remote profile exists.
-- When both local and remote state exist for the same account, they are merged; the browser then debounces writes to Supabase by two seconds.
+- Signing in with a guest state promotes that state into the account when no remote profile exists. Guest-created custom scenarios are promoted into `custom_scenarios` on first sign-in.
+- When both local and remote state exist for the same account, they are merged; the browser then debounces writes to Supabase by two seconds. Custom scenarios merge by `id`, keeping the newest `updatedAt`.
+- Custom scenario edits, duplicates, and deletes update local storage first and then sync in the background; a failed sync keeps the local copy and shows a warning badge.
 - Active practice time is recorded in one-minute increments while the tab is visible.
 - Clearing site data while signed out removes guest progress permanently.
 - Account deletion cascades through all tables via `auth.users(id)` foreign keys.
@@ -358,8 +418,9 @@ Error:
 
 | Method | Path | Purpose | Rate limit |
 | --- | --- | --- | --- |
-| `GET` | `/api/health` | Status, AI mode, timestamp | None |
+| `GET` | `/api/health` | Status, AI mode and active provider, timestamp | None |
 | `POST` | `/api/chat` | One tutor turn with correction and vocabulary | `CHAT_RATE_*` |
+| `POST` | `/api/scenarios/generate` | Turn one learner idea into a validated, editable scenario | `SCENARIO_RATE_*` |
 | `POST` | `/api/assist` | Explain, simplify, or translate a German snippet | `ASSIST_RATE_*` |
 | `POST` | `/api/word` | Dictionary details for a single word | `WORD_RATE_*` |
 
@@ -378,10 +439,29 @@ Error:
 }
 ```
 
-- `scenarioId` must be one of `cafe`, `doctor`, `interview`, `office`, `shopping`.
+- `scenarioId` must be one of `cafe`, `doctor`, `interview`, `office`, `shopping`, or a saved `custom_*` id.
+- Custom scenario turns also include `customScenario` in the exact snake_case generated-scenario shape. It must use the custom id that starts with `custom_`; the server rejects a missing or malformed payload.
 - `level` must be `A1`, `A2`, or `B1`.
 - `learnerMessage` is 1–500 characters.
 - `history` is optional and limited to 12 messages.
+
+### `POST /api/scenarios/generate`
+
+```json
+{
+  "idea": "عايز أتدرب على حجز غرفة في فندق",
+  "level": "A2",
+  "formality": "Sie",
+  "tone": "friendly",
+  "forceRegenerate": false
+}
+```
+
+- `idea` is 3–500 characters and must contain Arabic or Latin letters. Arabic, Egyptian dialect, German, English, and mixed text are all accepted.
+- `level`, `formality`, and `tone` are optional; `tone` defaults to `friendly`.
+- `forceRegenerate` skips a completed cache entry but still joins an identical in-flight request.
+- Invalid input is `400 invalid_request`; a safety refusal is `422 scenario_refused`; rate limiting is `429 rate_limited`.
+- The response is cached in memory for 30 minutes by normalized idea + level + formality + tone.
 
 ### `POST /api/assist`
 
@@ -417,16 +497,18 @@ Returns the word's article, plural, part of speech, Arabic and English meanings,
 - **`SettingsProvider`** owns UI language, theme, and instant application to `<html>`/`<body>`. Preferences are mirrored into the authenticated profile but local choices always win.
 - **`AuthProvider`** wraps Supabase session handling and exposes email, Google, and sign-out actions. It remains fully functional without Supabase by reporting guest/anonymous mode.
 - **`ProgressProvider`** is the single source of truth for learning data. It hydrates guest or account progress, exposes typed mutations, debounces remote saves, tracks active minutes, records chat mistakes as weak spots, and merges local/remote state on sign-in.
-- **Services** isolate side effects: `ai.ts` (typed Zod client), `supabaseClient.ts`, `remoteProgress.ts`, `localStore.ts`, `dictionary.ts`, and `wordLookup.ts`.
+- **`CustomScenariosProvider`** owns learner-generated scenarios. It merges per-owner local storage, promoted guest scenarios, and Supabase rows by `updatedAt`, then exposes save, delete, duplicate, and lookup helpers. Scenario generation itself happens in `CustomScenarioPage`.
+- **Services** isolate side effects: `ai.ts` (typed Zod client), `customScenarioStore.ts` (validated local persistence and merging), `remoteCustomScenarios.ts` (Supabase sync), `customScenarioMapping.ts` (API/domain/chat mapping), `supabaseClient.ts`, `remoteProgress.ts`, `localStore.ts`, `dictionary.ts`, and `wordLookup.ts`.
 - **Domain types** in `types/domain.ts` are shared by seed data, state, services, and UI.
 - **Route gates** distinguish anonymous, guest, and authenticated users; guests can still open `/auth` to promote progress, while authenticated users are redirected away from it.
 
 ### API
 
 - `config.ts` resolves the shared root `.env`, validates numeric settings, and decides the AI mode.
-- `app.ts` composes Express middleware, rate limiters, Zod validation, scenario lookup, and response envelopes.
-- `prompts/` contains the tutor, assist, and word prompts. The tutor prompt enforces the CEFR cap, correction contract, Egyptian Arabic voice, safety boundaries, and JSON output.
-- `services/ai.ts` defines an `AiGateway` interface with live and demo implementations. The live gateway retries once with a repair instruction when structured JSON is invalid.
+- `app.ts` composes Express middleware, rate limiters, Zod validation, scenario lookup, custom scenario resolution, and response envelopes.
+- `prompts/` contains the tutor, assist, word, and scenario prompts. The tutor prompt enforces the CEFR cap, correction contract, Egyptian Arabic voice, safety boundaries, formality, tone, grammar focus, key vocabulary, and JSON output. The scenario prompt isolates learner ideas as untrusted data and defines refusal rules.
+- `services/ai.ts` defines an `AiGateway` interface with live and demo implementations. The live gateway retries once with a repair instruction when structured JSON is invalid. The demo gateway returns deterministic scenarios for the full creator flow.
+- `services/scenarioCache.ts` normalizes ideas (case, punctuation, spacing, Arabic diacritics), caches completed scenarios for 30 minutes, and de-duplicates concurrent identical requests.
 - `lib/json.ts` extracts a JSON object even when a model wraps it in prose or code fences.
 - `lib/http.ts` normalises Zod errors, payload errors, not-found routes, and unexpected failures.
 
@@ -443,7 +525,17 @@ ProgressProvider ── debounced upsert ──► Supabase (optional)
                                               └──► Zod validate/retry
 ```
 
-The browser never sends free-form personas or prompts. It sends structured learning data and the server chooses the matching scenario prompt.
+The browser never sends free-form personas or prompts for built-in scenes. It sends structured learning data and the server chooses the matching scenario prompt. Custom scenarios are generated through `/api/scenarios/generate`, edited locally, and then sent back as validated scenario data on each chat turn.
+
+```
+CustomScenarioPage ── POST /api/scenarios/generate ──► Express ──► AI provider
+        │                                                   │
+        │ validated editable preview                        └── cache + repair
+        ▼
+CustomScenariosProvider ── local storage ──► Supabase custom_scenarios (optional)
+        │
+        └── custom_* id + validated payload ──► POST /api/chat
+```
 
 ---
 
@@ -451,7 +543,7 @@ The browser never sends free-form personas or prompts. It sends structured learn
 
 | Content | Count |
 | --- | --- |
-| Role-play scenarios | 5 (A1–B1) |
+| Role-play scenarios | 5 built-in + unlimited AI-created custom scenarios |
 | Seeded vocabulary cards | 100 A1 words |
 | Grammar drill questions | 40 |
 | · Article questions | 12 |
@@ -490,9 +582,13 @@ npm test --workspace @bruecke/web
 
 ## Testing and verification
 
-The repository currently includes 33 unit tests:
+The repository currently includes 93 unit tests:
 
 - API JSON extraction and structured-response parsing.
+- API request/model schemas, including custom scenario limits, formality/article validation, and refusal shapes.
+- Endpoint tests for scenario generation: validation, tone attachment, explicit level/formality override, cache hits, forced regeneration, refusal mapping, and custom-chat resolution.
+- Scenario cache normalization, TTL expiry, concurrent de-duplication, and refresh semantics.
+- Frontend custom-scenario mapping, API payload round-trips, validated storage parsing, and newest-wins merging.
 - SRS scheduling: resets, ease changes, intervals, one-year cap, due filtering, queue limits.
 - Adaptive question selection: empty banks, over-sized counts, weak-pattern bias, uniqueness, weak-spot sorting, topic accuracy.
 - German segmentation and grammar colouring: articles, indefinite articles, verbs, hyphenated names, punctuation preservation.
@@ -507,14 +603,16 @@ For a manual smoke test:
 
 1. Complete onboarding and placement.
 2. Open a tutor scenario, send a message with a deliberate article error, and confirm the correction card, praise, translation, and follow-up question.
-3. Add a suggested word to vocabulary.
-4. Review due vocabulary cards with all four grades.
-5. Complete an article/case drill and a preposition drill.
-6. Build a sentence, check it, and reset it.
-7. Open progress and follow a weak-spot deep link.
-8. Toggle Arabic/English and light/dark mode.
-9. Install the PWA and reload while offline to verify the shell and local content.
-10. Sign in with Supabase configured and confirm sync and guest-progress promotion.
+3. Open **Create a scenario with AI**, enter an Arabic idea such as `عايز أتدرب على حجز غرفة في فندق`, generate, edit one field, regenerate, then save and start the chat. Confirm the AI-made badge, edit, duplicate, and delete flows on `/tutor`.
+4. Try an unsafe or off-topic idea and confirm the Arabic refusal appears with a retry action.
+5. Add a suggested word to vocabulary.
+6. Review due vocabulary cards with all four grades.
+7. Complete an article/case drill and a preposition drill.
+8. Build a sentence, check it, and reset it.
+9. Open progress and follow a weak-spot deep link.
+10. Toggle Arabic/English and light/dark mode.
+11. Install the PWA and reload while offline to verify the shell and local content.
+12. Sign in with Supabase configured and confirm sync, guest-progress promotion, and custom scenario sync.
 
 ---
 
@@ -528,7 +626,7 @@ For a manual smoke test:
 - AI chat, AI word lookup, and Supabase sync require connectivity.
 - Installing requires HTTPS (or localhost during development).
 
-When deploying behind a CDN, serve `index.html` for unknown navigation routes so React Router can handle deep links such as `/tutor/cafe`.
+When deploying behind a CDN, serve `index.html` for unknown navigation routes so React Router can handle deep links such as `/tutor/cafe` and `/tutor/create`.
 
 ---
 
@@ -560,7 +658,8 @@ npm run start --workspace @bruecke/api
 
 Set production values in the root `.env` or the host's environment:
 
-- `ANTHROPIC_API_KEY`
+- `AI_PROVIDER` (`anthropic` or `gemini`; leave `demo` out of production)
+- `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` for the selected provider
 - `CLIENT_ORIGIN=https://your-web-origin`
 - `PORT` as required by the host
 - `TRUST_PROXY=1` when behind a trusted proxy
@@ -576,7 +675,7 @@ Vite environment variables are baked in at build time. Rebuild the web app whene
 
 ### Production checklist
 
-- [ ] `ANTHROPIC_API_KEY` is set on the server only.
+- [ ] The API key for the selected `AI_PROVIDER` is set on the server only.
 - [ ] `AI_DEMO_MODE` is not `true`.
 - [ ] `NODE_ENV=production`.
 - [ ] `CLIENT_ORIGIN` lists every real web origin, including native app origins if applicable.
@@ -636,11 +735,13 @@ The current domain model, skill-tracking tables, and deep-linkable trainers are 
 | Symptom | Fix |
 | --- | --- |
 | `npm` or `node` not found on Windows | Add Node.js to `PATH`, e.g. `$env:Path = "C:\Program Files\nodejs;$env:Path"`, then reopen the terminal. |
-| Web loads but AI calls fail | Check `http://localhost:8787/api/health`. In development without a key, `ai` should report `demo`. |
-| AI routes return `503 ai_not_configured` | A production server has no `ANTHROPIC_API_KEY`. Set it and restart. |
+| Web loads but AI calls fail | Check `http://localhost:8787/api/health`. In development without a key, `ai` should report `demo` and `provider` should name the active gateway. |
+| AI routes return `503 ai_not_configured` | A production server has no key for the selected provider. Set `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` and restart. |
 | CORS error | Add the exact web origin to `CLIENT_ORIGIN` (comma-separated) and restart the API. |
 | Sign-in unavailable | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` are missing. The app deliberately stays in guest mode. |
 | Sync status shows an error | Confirm the migration ran, RLS is enabled, and the signed-in user's `auth.uid()` matches `user_id`. Check the browser console for the Supabase error. |
+| Custom scenario says “not found” | It may belong to another guest/account namespace. Open `/tutor`, confirm the card is listed, and avoid clearing site data while signed out. |
+| Scenario generation is refused | The idea may be unsafe or unrelated to German conversation practice. Try an everyday situation such as a hotel, doctor, office, or shopping scene. |
 | OAuth returns to the wrong place | Add `<web-origin>/auth` to Supabase redirect URLs and set the Site URL correctly. |
 | PWA does not offer installation | Use HTTPS or localhost, confirm the manifest and service worker load, and clear old service workers during development. |
 | Speech recognition does nothing | Use a browser/OS with Web Speech recognition (often Chrome/Edge/Android). Typing and speech playback remain available. |
@@ -654,7 +755,7 @@ The current domain model, skill-tracking tables, and deep-linkable trainers are 
 - Arabic typeface: [Cairo](https://fonts.google.com/specimen/Cairo) via Fontsource.
 - Latin/German typeface: [Inter](https://fonts.google.com/specimen/Inter) via Fontsource.
 - Icons: [Lucide](https://lucide.dev).
-- AI: [Anthropic Claude](https://www.anthropic.com).
+- AI: [Anthropic Claude](https://www.anthropic.com) and [Google Gemini](https://ai.google.dev).
 - Auth and database: [Supabase](https://supabase.com).
 - Packaging path: [Capacitor](https://capacitorjs.com).
 
