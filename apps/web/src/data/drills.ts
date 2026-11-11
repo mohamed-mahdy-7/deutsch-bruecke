@@ -1,4 +1,4 @@
-import type { DrillQuestion } from "@/types/domain";
+import type { DrillQuestion, DrillTopic } from "@/types/domain";
 
 /**
  * 30 article/case questions + 10 preposition questions. Patterns are stable IDs
@@ -819,3 +819,21 @@ export const ARTICLE_CASE_QUESTIONS = DRILL_QUESTIONS.filter(
 export const PREPOSITION_QUESTIONS = DRILL_QUESTIONS.filter(
   (question) => question.topic === "prepositions",
 );
+
+/**
+ * Offline/fallback pools, grouped by the seven practice categories. Only
+ * articles, cases and prepositions have static content; the other categories
+ * need the AI or demo provider.
+ */
+export const STATIC_DRILL_BANKS: Partial<Record<DrillTopic, DrillQuestion[]>> =
+  {
+    articles: DRILL_QUESTIONS.filter(
+      (question) => question.topic === "articles",
+    ),
+    cases: DRILL_QUESTIONS.filter((question) => question.topic === "cases"),
+    prepositions: PREPOSITION_QUESTIONS,
+  };
+
+export function staticDrillBank(topic: DrillTopic): DrillQuestion[] {
+  return STATIC_DRILL_BANKS[topic] ?? [];
+}

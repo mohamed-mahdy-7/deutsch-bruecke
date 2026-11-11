@@ -13,6 +13,8 @@ import {
   assistRequestSchema,
   chatRequestSchema,
   customScenarioSchema,
+  drillRequestSchema,
+  drillResponseSchema,
   explainResponseSchema,
   scenarioRequestSchema,
   simplifyResponseSchema,
@@ -20,6 +22,8 @@ import {
   wordRequestSchema,
 } from "./schemas.js";
 import { getAiGateway, type AiGateway } from "./services/ai.js";
+import { buildDrillCacheKey, drillCache } from "./services/drillCache.js";
+import { generateDrillSession } from "./services/drillService.js";
 import {
   buildScenarioCacheKey,
   scenarioCache,
@@ -54,6 +58,7 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   const assistLimiter = createRateLimiter(config.rateLimits.assist);
   const wordLimiter = createRateLimiter(config.rateLimits.word);
   const scenarioLimiter = createRateLimiter(config.rateLimits.scenario);
+  const drillLimiter = createRateLimiter(config.rateLimits.drill);
 
   app.get("/api/health", (_req, res) => {
     res.json({
@@ -98,6 +103,34 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
         input.forceRegenerate,
       );
 
+      res.json({
+        ok: true,
+        data: result.value,
+        meta: { mode: gateway.mode, cached: result.cached },
+      });
+    }),
+  );
+
+  app.post(
+    "/api/drills/generate",
+    drillLimiter,
+    asyncHandler(async (req, res) => {
+      const input = drillRequestSchema.parse(req.body);
+      const gateway = resolveGateway();
+      const cacheKey = buildDrillCacheKey({
+        topic: input.topic,
+        level: input.level,
+        weakSpots: input.weakSpots,
+      });
+
+      const result = await drillCache.getOrCreate(
+        cacheKey,
+        () => generateDrillSession(input, gateway),
+        input.forceRegenerate,
+      );
+
+      // Defensive validation at the transport boundary, mirroring /api/assist.
+      drillResponseSchema.parse(result.value);
       res.json({
         ok: true,
         data: result.value,

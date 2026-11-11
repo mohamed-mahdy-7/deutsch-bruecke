@@ -16,6 +16,16 @@ export type GrammarTopic =
   | "vocabulary"
   | "prepositions";
 
+/** Seven practice categories in the AI drill hub. */
+export type DrillTopic =
+  | "articles"
+  | "cases"
+  | "prepositions"
+  | "verb_position"
+  | "separable_verbs"
+  | "subordinate_clauses"
+  | "plurals";
+
 export type GrammarArticle = "der" | "die" | "das";
 
 export type MistakeType =
@@ -245,7 +255,10 @@ export interface Scenario {
 
 export interface DrillQuestion {
   id: string;
-  topic: Extract<GrammarTopic, "articles" | "cases" | "prepositions">;
+  /** Analytics bucket that must stay inside the five Supabase values. */
+  topic: GrammarTopic;
+  /** Practice category used by the grammar hub and AI generation. */
+  drillTopic?: DrillTopic;
   pattern: string;
   level: CefrLevel;
   promptBefore: string;

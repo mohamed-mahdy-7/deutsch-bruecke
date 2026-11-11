@@ -1,6 +1,7 @@
 import type { TranslationKey } from "@/lib/i18n";
 import type {
   CefrLevel,
+  DrillTopic,
   GrammarTopic,
   MistakeType,
   NativeDialect,
@@ -52,6 +53,26 @@ export const TOPIC_LABEL_KEY: Record<GrammarTopic, TranslationKey> = {
   prepositions: "topic.prepositions",
 };
 
+export const DRILL_TOPIC_LABEL_KEY: Record<DrillTopic, TranslationKey> = {
+  articles: "drillTopic.articles",
+  cases: "drillTopic.cases",
+  prepositions: "drillTopic.prepositions",
+  verb_position: "drillTopic.verb_position",
+  separable_verbs: "drillTopic.separable_verbs",
+  subordinate_clauses: "drillTopic.subordinate_clauses",
+  plurals: "drillTopic.plurals",
+};
+
+export const DRILL_TOPIC_DESC_KEY: Record<DrillTopic, TranslationKey> = {
+  articles: "drillTopic.articlesDesc",
+  cases: "drillTopic.casesDesc",
+  prepositions: "drillTopic.prepositionsDesc",
+  verb_position: "drillTopic.verb_positionDesc",
+  separable_verbs: "drillTopic.separable_verbsDesc",
+  subordinate_clauses: "drillTopic.subordinate_clausesDesc",
+  plurals: "drillTopic.pluralsDesc",
+};
+
 export const CATEGORY_LABEL_KEY: Record<VocabularyCategory, TranslationKey> = {
   home: "vocab.category.home",
   people: "vocab.category.people",
@@ -87,12 +108,13 @@ export function weakSpotHref(topic: GrammarTopic): string {
     case "vocabulary":
       return "/vocabulary/review";
     case "prepositions":
-      return "/grammar?tab=prepositions";
+      return "/grammar?topic=prepositions";
     case "word_order":
       return "/builder";
     case "cases":
+      return "/grammar?topic=cases";
     case "articles":
-      return "/grammar?tab=articles";
+      return "/grammar?topic=articles";
     default:
       return "/grammar";
   }

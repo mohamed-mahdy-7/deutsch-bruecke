@@ -118,6 +118,11 @@ export const config = {
         intFromEnv(process.env.SCENARIO_RATE_WINDOW_MINUTES, 15) * 60_000,
       max: intFromEnv(process.env.SCENARIO_RATE_MAX, 20),
     },
+    drill: {
+      windowMs:
+        intFromEnv(process.env.DRILL_RATE_WINDOW_MINUTES, 15) * 60_000,
+      max: intFromEnv(process.env.DRILL_RATE_MAX, 20),
+    },
   },
 } as const;
 

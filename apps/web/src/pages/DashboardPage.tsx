@@ -269,7 +269,7 @@ export function DashboardPage() {
         <div className="grid gap-3 sm:grid-cols-3">
           {[
             {
-              to: "/grammar?tab=articles",
+              to: "/grammar?topic=articles",
               icon: BookOpen,
               title: t("dash.articles"),
               body: t("dash.articlesBody"),
@@ -283,7 +283,7 @@ export function DashboardPage() {
               tone: "bg-accent-soft text-accent-soft-foreground",
             },
             {
-              to: "/grammar?tab=prepositions",
+              to: "/grammar?topic=prepositions",
               icon: Target,
               title: t("dash.prepositions"),
               body: t("dash.prepositionsBody"),

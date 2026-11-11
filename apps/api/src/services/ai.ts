@@ -3,6 +3,7 @@ import type { ZodType, ZodTypeDef } from "zod";
 import { config } from "../config.js";
 import { parseJsonObject } from "../lib/json.js";
 import {
+  drillBatchModelSchema,
   explainResponseSchema,
   scenarioModelResponseSchema,
   simplifyResponseSchema,
@@ -10,6 +11,9 @@ import {
   tutorResponseSchema,
   wordResponseSchema,
   type AssistAction,
+  type DrillBatchModel,
+  type DrillTopic,
+  type DrillWeakSpot,
   type ExplainResponse,
   type Formality,
   type ScenarioDraft,
@@ -25,6 +29,12 @@ import {
   buildScenarioSystemPrompt,
   buildScenarioUserPrompt,
 } from "../prompts/scenario.js";
+import {
+  buildDrillReplacementPrompt,
+  buildDrillSystemPrompt,
+  buildDrillUserPrompt,
+} from "../prompts/drill.js";
+import { pickBankDrillQuestions } from "../data/drills.js";
 import {
   buildAssistSystemPrompt,
   buildAssistUserPrompt,
@@ -172,6 +182,13 @@ export interface AiGateway {
     level?: Level;
     formality?: Formality;
   }): Promise<ScenarioModelResponse>;
+  generateDrills(input: {
+    topic: DrillTopic;
+    level: Level;
+    weakSpots: DrillWeakSpot[];
+    count: number;
+    excludePrompts?: string[];
+  }): Promise<DrillBatchModel>;
 }
 
 /**
@@ -187,6 +204,7 @@ abstract class PromptGateway implements AiGateway {
     messages: ModelMessage[],
     schema: ZodType<T, ZodTypeDef, unknown>,
     repairInstruction: string,
+    maxTokens?: number,
   ): Promise<T>;
 
   async tutor(input: {
@@ -279,6 +297,23 @@ abstract class PromptGateway implements AiGateway {
       buildScenarioRepairPrompt(),
     );
   }
+
+  async generateDrills(input: {
+    topic: DrillTopic;
+    level: Level;
+    weakSpots: DrillWeakSpot[];
+    count: number;
+    excludePrompts?: string[];
+  }): Promise<DrillBatchModel> {
+    return this.requestJson(
+      buildDrillSystemPrompt(),
+      [{ role: "user", content: buildDrillUserPrompt(input) }],
+      drillBatchModelSchema,
+      buildDrillReplacementPrompt(),
+      // Ten bilingual questions need more room than a single tutor turn.
+      4_096,
+    );
+  }
 }
 
 class AnthropicGateway extends PromptGateway {
@@ -297,10 +332,11 @@ class AnthropicGateway extends PromptGateway {
   private async generate(
     system: string,
     messages: ModelMessage[],
+    maxTokens = 1_800,
   ): Promise<string> {
     const response = await this.client.messages.create({
       model: config.anthropicModel,
-      max_tokens: 1_800,
+      max_tokens: maxTokens,
       temperature: 0.45,
       system,
       messages,
@@ -318,9 +354,10 @@ class AnthropicGateway extends PromptGateway {
     messages: ModelMessage[],
     schema: ZodType<T, ZodTypeDef, unknown>,
     repairInstruction: string,
+    maxTokens?: number,
   ): Promise<T> {
     return requestStructuredJson(
-      (nextMessages) => this.generate(system, nextMessages),
+      (nextMessages) => this.generate(system, nextMessages, maxTokens),
       messages,
       schema,
       repairInstruction,
@@ -353,6 +390,7 @@ class GeminiGateway extends PromptGateway {
   private async generate(
     system: string,
     messages: ModelMessage[],
+    maxTokens = 1_800,
   ): Promise<string> {
     let response: Response;
     try {
@@ -373,7 +411,7 @@ class GeminiGateway extends PromptGateway {
             })),
             generationConfig: {
               temperature: 0.45,
-              maxOutputTokens: 1_800,
+              maxOutputTokens: maxTokens,
               responseMimeType: "application/json",
             },
           }),
@@ -433,9 +471,10 @@ class GeminiGateway extends PromptGateway {
     messages: ModelMessage[],
     schema: ZodType<T, ZodTypeDef, unknown>,
     repairInstruction: string,
+    maxTokens?: number,
   ): Promise<T> {
     return requestStructuredJson(
-      (nextMessages) => this.generate(system, nextMessages),
+      (nextMessages) => this.generate(system, nextMessages, maxTokens),
       messages,
       schema,
       repairInstruction,
@@ -1007,6 +1046,23 @@ class DemoGateway implements AiGateway {
       return { refused_ar: demoScenarioRefusalMessage };
     }
     return pickDemoScenario(input);
+  }
+
+  async generateDrills(input: {
+    topic: DrillTopic;
+    level: Level;
+    weakSpots: DrillWeakSpot[];
+    count: number;
+    excludePrompts?: string[];
+  }): Promise<DrillBatchModel> {
+    return {
+      questions: pickBankDrillQuestions({
+        topic: input.topic,
+        level: input.level,
+        count: input.count,
+        excludePrompts: input.excludePrompts,
+      }),
+    };
   }
 }
 

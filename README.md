@@ -43,7 +43,7 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 - **Safe mode** — a per-session toggle that asks the tutor for shorter, slower, idiom-free German.
 - **Speech support** — German text can be spoken with the Web Speech API (`de-DE`), and supported browsers can dictate learner turns.
 - **Word help** — tap a German word for a local dictionary lookup first; when online, the AI can fill in article, plural, meaning, and an example.
-- **Grammar trainers** — article and case drills plus preposition drills. Questions are sampled with a bias toward the learner's existing weak patterns while preserving variety.
+- **AI grammar practice hub** — seven drill topics: articles, cases, prepositions, verb position, separable verbs, subordinate clauses, and plurals. Every session asks the API for ten level-aware questions shaped by the learner's recorded weak spots. Questions are validated before display, cached by normalized request, and explained in Egyptian Arabic. The saved article/case/preposition pools remain as an offline fallback.
 - **Sentence builder** — 16 token-ordering exercises covering verb-second, verb-final, separable verbs, questions, and general word order.
 - **SRS vocabulary** — 100 seeded A1 cards plus words added manually or captured from conversations. Reviews use an SM-2-inspired scheduler with Again / Hard / Good / Easy grades.
 - **Progress dashboard** — XP, streak, daily goal, due cards, seven-day activity, 30-day heatmap, topic accuracy, weakest patterns, a concrete next-step plan, and recent drill results.
@@ -93,23 +93,27 @@ Requirements: **Node.js 20 or newer** and npm 10 or newer.
 │   │       ├── index.ts          # server bootstrap and shutdown
 │   │       ├── schemas.ts        # Zod request/response contracts
 │   │       ├── data/scenarios.ts # built-in allow-list + custom scenario mapper
-│   │       ├── lib/              # JSON extraction, errors, HTTP helpers
+│   │       ├── data/drills.ts    # 70-question demo/fallback drill bank
+│   │       ├── lib/              # JSON extraction, errors, HTTP helpers, drill text normalisation
 │   │       ├── middleware/       # JSON-aware rate limiter
-│   │       ├── prompts/          # tutor, assist, word, and scenario prompts
+│   │       ├── prompts/          # tutor, assist, word, scenario, and drill prompts
 │   │       ├── services/ai.ts    # Anthropic, Gemini, and demo gateways
-│   │       └── services/scenarioCache.ts # normalized cache + in-flight dedupe
+│   │       ├── services/drillCache.ts      # normalized cache + in-flight dedupe
+│   │       ├── services/drillService.ts    # generation, repair, bank fill
+│   │       ├── services/drillValidation.ts # sanity checks + public mapping
+│   │       └── services/scenarioCache.ts   # normalized cache + in-flight dedupe
 │   └── web                       # React PWA
 │       ├── public/               # icons, favicon
 │       ├── scripts/              # reproducible icon generation
 │       └── src
-│           ├── components/       # UI, layout, German, tutor components
+│           ├── components/       # UI, layout, German, tutor, and drill components
 │           ├── config/           # browser-safe env
 │           ├── data/             # scenarios, vocab, drills, sentences, placement
 │           ├── hooks/            # speech, online, install
 │           ├── lib/              # SRS, adaptive, dates, German highlighting, i18n
 │           ├── pages/            # route screens
 │           ├── providers/        # settings/theme/language
-│           ├── services/         # AI client, local store, Supabase, dictionary
+│           ├── services/         # AI client, drill mapping, local store, Supabase, dictionary
 │           ├── state/            # auth, progress, factories, merge, mutations
 │           ├── styles/           # Tailwind layers and design tokens
 │           └── types/            # canonical domain model
@@ -199,6 +203,8 @@ All values live in a single root `.env` file. The API loads it with `dotenv`; Vi
 | `WORD_RATE_MAX` | `150` | API | Word lookups per IP per window. |
 | `SCENARIO_RATE_WINDOW_MINUTES` | `15` | API | AI scenario-generation rate-limit window. |
 | `SCENARIO_RATE_MAX` | `20` | API | Scenario generations per IP per window. Each cache miss can call the AI provider. |
+| `DRILL_RATE_WINDOW_MINUTES` | `15` | API | AI drill-generation rate-limit window. |
+| `DRILL_RATE_MAX` | `20` | API | Drill sessions per IP per window. Each cache miss can call the provider once or twice. |
 | `TRUST_PROXY` | `0` | API | Set to `1` only behind a trusted reverse proxy so rate limits use the real client IP. |
 
 Restart the dev server after changing `.env` or Vite values.
@@ -241,10 +247,12 @@ The server never silently enables demo mode in production.
 - The browser sends a built-in scenario **ID**; the server owns the built-in personas and prompts. Custom scenarios are sent as a fully validated contract and are treated strictly as learning data, never as instructions.
 - Scenario ideas are escaped inside an XML data block, length-limited, and validated before reaching the provider. The prompt refuses unsafe or off-topic ideas with a warm Arabic message (`422 scenario_refused`).
 - Generated scenarios are cached by normalized idea + level + formality + tone. Identical in-flight requests share one provider call; `forceRegenerate` skips completed cache reads but still joins an in-flight identical call.
+- Generated drills are cached by practice topic + CEFR level + normalized weak-spot patterns and counts. Identical in-flight requests share one provider call; `forceRegenerate` skips a completed cache entry.
+- Every drill item is checked beyond Zod shape validation: four distinct options, exactly one correct answer that matches an option, and a non-empty unique question stem. Invalid items are discarded, one replacement request is made for the missing items, and the remaining gap is filled from the deterministic bank.
 - Every request body is validated with Zod and capped at 32 kB.
 - Responses are validated against Zod; Markdown fences are stripped and malformed output gets one repair attempt.
 - `helmet` sets security headers; CORS is an explicit allow-list.
-- JSON-aware rate limiters protect chat, assist, word, and scenario-generation routes per IP.
+- JSON-aware rate limiters protect chat, assist, word, scenario-generation, and drill-generation routes per IP.
 - Errors are normalised into a stable envelope; internal errors are logged, not leaked.
 - The tutor prompt treats learner text and history as untrusted data and refuses prompt-extraction and off-topic requests.
 - Conversation history is limited to 12 items by the request schema and trimmed again before the Anthropic call.
@@ -314,6 +322,37 @@ Mistakes are capped at three, vocabulary suggestions at three, and German reply 
 ```
 
 The response `meta` includes `mode` and `cached`. A safety refusal is `422` with `error.code = "scenario_refused"` and the Arabic refusal in `error.message`.
+
+`POST /api/drills/generate` returns ten camelCase questions plus the number that came from the saved bank:
+
+```json
+{
+  "questions": [
+    {
+      "id": "drill_9f4c…",
+      "topic": "cases",
+      "grammarTopic": "cases",
+      "pattern": "dative-article-feminine",
+      "level": "A2",
+      "promptBefore": "Ich helfe",
+      "promptAfter": "Frau.",
+      "hintAr": "الفعل ده بياخد Dativ.",
+      "hintEn": "This verb takes the dative.",
+      "options": ["der", "die", "den", "dem"],
+      "correctAnswer": "der",
+      "translationAr": "أنا بساعد الست.",
+      "translationEn": "I help the woman.",
+      "explanationAr": "«helfen» بياخد Dativ، والمؤنّث بيبقى «der».",
+      "explanationEn": "“helfen” takes the dative, so the feminine article becomes “der”.",
+      "weakSpotAr": "أداة المؤنّث في Dativ",
+      "weakSpotEn": "Feminine dative article"
+    }
+  ],
+  "fallbackCount": 0
+}
+```
+
+`topic` is the seven-value practice category; `grammarTopic` is the persisted analytics bucket. Word-order categories all persist as `word_order`, and `plurals` persists as `articles`, so no Supabase constraint changes are needed. If the provider fails completely, the endpoint returns `502 drill_generation_failed` with a friendly Arabic retry message; the UI can still start the saved offline bank.
 
 ---
 
@@ -421,6 +460,7 @@ Error:
 | `GET` | `/api/health` | Status, AI mode and active provider, timestamp | None |
 | `POST` | `/api/chat` | One tutor turn with correction and vocabulary | `CHAT_RATE_*` |
 | `POST` | `/api/scenarios/generate` | Turn one learner idea into a validated, editable scenario | `SCENARIO_RATE_*` |
+| `POST` | `/api/drills/generate` | Generate a ten-question, level-aware grammar drill session | `DRILL_RATE_*` |
 | `POST` | `/api/assist` | Explain, simplify, or translate a German snippet | `ASSIST_RATE_*` |
 | `POST` | `/api/word` | Dictionary details for a single word | `WORD_RATE_*` |
 
@@ -462,6 +502,27 @@ Error:
 - `forceRegenerate` skips a completed cache entry but still joins an identical in-flight request.
 - Invalid input is `400 invalid_request`; a safety refusal is `422 scenario_refused`; rate limiting is `429 rate_limited`.
 - The response is cached in memory for 30 minutes by normalized idea + level + formality + tone.
+
+### `POST /api/drills/generate`
+
+```json
+{
+  "topic": "cases",
+  "level": "A2",
+  "weakSpots": [
+    { "pattern": "dative-article-feminine", "count": 4, "labelAr": "أداة المؤنّث في Dativ" }
+  ],
+  "forceRegenerate": false
+}
+```
+
+- `topic` must be one of `articles`, `cases`, `prepositions`, `verb_position`, `separable_verbs`, `subordinate_clauses`, or `plurals`.
+- `level` must be `A1`, `A2`, or `B1`.
+- `weakSpots` is optional (maximum 20). Only `pattern` and `count` affect generation; labels are passed to the prompt as extra context.
+- `forceRegenerate` skips a completed cache entry while still joining an identical in-flight request.
+- The endpoint always returns ten validated questions when the provider responds. One replacement provider call is allowed for invalid or missing items, then the saved bank fills any remaining gap and reports it in `fallbackCount`.
+- A complete provider failure is `502 drill_generation_failed`; rate limiting is `429 rate_limited`.
+- Responses are cached in memory for 30 minutes by topic + level + normalized weak-spot patterns/counts.
 
 ### `POST /api/assist`
 
@@ -509,6 +570,8 @@ Returns the word's article, plural, part of speech, Arabic and English meanings,
 - `prompts/` contains the tutor, assist, word, and scenario prompts. The tutor prompt enforces the CEFR cap, correction contract, Egyptian Arabic voice, safety boundaries, formality, tone, grammar focus, key vocabulary, and JSON output. The scenario prompt isolates learner ideas as untrusted data and defines refusal rules.
 - `services/ai.ts` defines an `AiGateway` interface with live and demo implementations. The live gateway retries once with a repair instruction when structured JSON is invalid. The demo gateway returns deterministic scenarios for the full creator flow.
 - `services/scenarioCache.ts` normalizes ideas (case, punctuation, spacing, Arabic diacritics), caches completed scenarios for 30 minutes, and de-duplicates concurrent identical requests.
+- `services/drillService.ts` runs the drill batch pipeline: one provider request, sanity filtering, at most one replacement request, then deterministic bank fill. `services/drillCache.ts` normalizes weak spots (slug, sorted pattern:count) and de-duplicates identical sessions. `services/drillValidation.ts` enforces four distinct options, exactly one correct answer, unique stems, and maps the raw snake_case model contract to the public camelCase one.
+- `prompts/drill.ts` defines level and topic guidance, four-option rules, weak-spot prioritisation, Arabic/English explanation requirements, and the replacement instruction. The demo gateway returns the same deterministic bank for every topic.
 - `lib/json.ts` extracts a JSON object even when a model wraps it in prose or code fences.
 - `lib/http.ts` normalises Zod errors, payload errors, not-found routes, and unexpected failures.
 
@@ -521,8 +584,10 @@ Seed content + local progress
 ProgressProvider ── debounced upsert ──► Supabase (optional)
         │
         ├── UI reads typed state
-        └── AI client ── POST /api/* ──► Express ──► Anthropic
-                                              └──► Zod validate/retry
+        ├── AI client ── POST /api/* ──► Express ──► Anthropic
+        │                                     └──► Zod validate/retry
+        └── Grammar hub ── POST /api/drills/generate ──► cache ──► provider
+                                                   └── sanity filter + bank fill
 ```
 
 The browser never sends free-form personas or prompts for built-in scenes. It sends structured learning data and the server chooses the matching scenario prompt. Custom scenarios are generated through `/api/scenarios/generate`, edited locally, and then sent back as validated scenario data on each chat turn.
@@ -545,10 +610,11 @@ CustomScenariosProvider ── local storage ──► Supabase custom_scenarios
 | --- | --- |
 | Role-play scenarios | 5 built-in + unlimited AI-created custom scenarios |
 | Seeded vocabulary cards | 100 A1 words |
-| Grammar drill questions | 40 |
+| Grammar drill questions (offline fallback) | 40 |
 | · Article questions | 12 |
 | · Case questions | 18 |
 | · Preposition questions | 10 |
+| AI/demo drill bank | 70 (10 per practice topic) |
 | Sentence-building exercises | 16 |
 | Placement questions | 5 |
 | Local dictionary entries | 100 |
@@ -582,12 +648,16 @@ npm test --workspace @bruecke/web
 
 ## Testing and verification
 
-The repository currently includes 93 unit tests:
+The repository currently includes 136 unit tests (89 API + 47 web):
 
 - API JSON extraction and structured-response parsing.
-- API request/model schemas, including custom scenario limits, formality/article validation, and refusal shapes.
+- API request/model schemas, including drill topics, weak-spot caps, option counts, custom scenario limits, formality/article validation, and refusal shapes.
 - Endpoint tests for scenario generation: validation, tone attachment, explicit level/formality override, cache hits, forced regeneration, refusal mapping, and custom-chat resolution.
+- Endpoint tests for drill generation: all seven topics, ten unique validated questions, normalized cache hits, forced regeneration, invalid-item replacement and bank fill, provider failure mapping, and unknown-topic rejection.
+- Drill sanity validation: duplicate options, missing answer match, duplicate stems across batches, empty stems, English fallback, camelCase mapping.
+- Drill cache normalization: weak-spot order/case/spacing, count merging and caps, stable empty key, TTL expiry, refresh, and concurrent de-duplication.
 - Scenario cache normalization, TTL expiry, concurrent de-duplication, and refresh semantics.
+- Frontend drill mapping: practice topic vs persisted grammar topic for all seven categories, plus static bank counts and question validity.
 - Frontend custom-scenario mapping, API payload round-trips, validated storage parsing, and newest-wins merging.
 - SRS scheduling: resets, ease changes, intervals, one-year cap, due filtering, queue limits.
 - Adaptive question selection: empty banks, over-sized counts, weak-pattern bias, uniqueness, weak-spot sorting, topic accuracy.
@@ -607,12 +677,14 @@ For a manual smoke test:
 4. Try an unsafe or off-topic idea and confirm the Arabic refusal appears with a retry action.
 5. Add a suggested word to vocabulary.
 6. Review due vocabulary cards with all four grades.
-7. Complete an article/case drill and a preposition drill.
-8. Build a sentence, check it, and reset it.
-9. Open progress and follow a weak-spot deep link.
-10. Toggle Arabic/English and light/dark mode.
-11. Install the PWA and reload while offline to verify the shell and local content.
-12. Sign in with Supabase configured and confirm sync, guest-progress promotion, and custom scenario sync.
+7. Open **Grammar**, choose each of the seven topics, and confirm ten generated questions with four distinct options, immediate Egyptian Arabic explanations, and a result screen. With no AI key, the **Demo mode** badge should appear and every topic should still work.
+8. Complete one AI drill session, start a second one, and confirm recorded weak-spot patterns appear as focus badges in the hub and are passed into the generated session.
+9. Stop the API (or block network) and confirm the friendly Arabic error plus **Try generating again**. For articles, cases, and prepositions, also confirm **Use saved questions** starts the offline bank.
+10. Build a sentence, check it, and reset it.
+11. Open progress and follow a weak-spot deep link; it should open the matching topic drill.
+12. Toggle Arabic/English and light/dark mode.
+13. Install the PWA and reload while offline to verify the shell and local content.
+14. Sign in with Supabase configured and confirm sync, guest-progress promotion, and custom scenario sync.
 
 ---
 
@@ -690,7 +762,7 @@ Vite environment variables are baked in at build time. Rebuild the web app whene
 
 ## Capacitor packaging guide
 
-Phase 1 is a PWA. The architecture is ready for a Capacitor wrapper in Phase 2:
+The app is currently a PWA. The architecture is ready for a Capacitor wrapper in a later phase:
 
 ```bash
 npm install @capacitor/core @capacitor/cli @capacitor/android
@@ -716,9 +788,19 @@ For iOS, install `@capacitor/ios` and add the iOS platform similarly. Capacitor 
 
 ---
 
-## Phase 2
+## Phase 2 — AI grammar drill sessions
 
-Designed but intentionally not implemented in Phase 1:
+Implemented in Phase 2:
+
+- The grammar page is now a seven-topic practice hub (articles, cases, prepositions, verb position, separable verbs, subordinate clauses, plurals) with the existing quick guide kept as a second tab.
+- Each topic generates ten questions through the server-side AI gateway, using the learner's CEFR level and recorded weak-spot patterns and counts.
+- Every question is validated for four distinct options, exactly one correct option, a unique stem, and a non-empty explanation. Invalid items are discarded, one replacement request is attempted, then the deterministic 70-question bank fills any gap with a visible `fallbackCount` note.
+- Generated sessions are cached by topic + level + normalized weak spots, and identical in-flight requests share one provider call.
+- The demo provider returns ten deterministic questions for every topic, so the whole flow works without an API key. The saved article/case/preposition pools remain available as an explicit offline fallback.
+- Arabic RTL layout, English toggle, German LTR isolation, and der/die/das colour coding are preserved in the new session UI, including loading skeletons, empty states, rate-limit/offline errors, and retry actions.
+- API and frontend coverage was expanded for schemas, sanity checks, cache behaviour, endpoint orchestration, mapping, and static banks.
+
+Planned for Phase 3:
 
 - A pronunciation coach with phoneme-level feedback.
 - Listening dictation exercises.
@@ -742,6 +824,7 @@ The current domain model, skill-tracking tables, and deep-linkable trainers are 
 | Sync status shows an error | Confirm the migration ran, RLS is enabled, and the signed-in user's `auth.uid()` matches `user_id`. Check the browser console for the Supabase error. |
 | Custom scenario says “not found” | It may belong to another guest/account namespace. Open `/tutor`, confirm the card is listed, and avoid clearing site data while signed out. |
 | Scenario generation is refused | The idea may be unsafe or unrelated to German conversation practice. Try an everyday situation such as a hotel, doctor, office, or shopping scene. |
+| Drill generation shows the Arabic retry message | Check `http://localhost:8787/api/health` and the provider key/quota. If the failure persists, articles, cases, and prepositions can still run from the saved bank. |
 | OAuth returns to the wrong place | Add `<web-origin>/auth` to Supabase redirect URLs and set the Site URL correctly. |
 | PWA does not offer installation | Use HTTPS or localhost, confirm the manifest and service worker load, and clear old service workers during development. |
 | Speech recognition does nothing | Use a browser/OS with Web Speech recognition (often Chrome/Edge/Android). Typing and speech playback remain available. |

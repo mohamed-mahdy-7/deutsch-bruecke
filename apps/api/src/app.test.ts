@@ -3,15 +3,20 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
+import { pickBankDrillQuestions } from "./data/drills.js";
 import type { ApiScenario } from "./data/scenarios.js";
 import type {
   CustomScenario,
+  DrillBatchModel,
+  DrillQuestionModel,
+  DrillResponse,
   ScenarioDraft,
   ScenarioModelResponse,
   TutorResponse,
   WordResponse,
 } from "./schemas.js";
 import type { AiGateway } from "./services/ai.js";
+import { drillCache } from "./services/drillCache.js";
 import { scenarioCache } from "./services/scenarioCache.js";
 
 interface ApiSuccess<T> {
@@ -78,6 +83,14 @@ let generateCalls: Array<{ idea: string; level?: string; formality?: string }> =
   [];
 let lastScenario: ApiScenario | undefined;
 let refuse = false;
+let drillCalls: Array<{
+  topic: string;
+  level: string;
+  count: number;
+  excludePrompts?: string[];
+}> = [];
+let drillOverride: DrillQuestionModel[] | null = null;
+let drillFails = false;
 
 const gateway: AiGateway = {
   mode: "demo",
@@ -100,6 +113,23 @@ const gateway: AiGateway = {
     // endpoint overrides whatever the model returned.
     return { ...draft } satisfies ScenarioModelResponse;
   },
+  async generateDrills(input) {
+    drillCalls.push({
+      topic: input.topic,
+      level: input.level,
+      count: input.count,
+      excludePrompts: input.excludePrompts,
+    });
+    if (drillFails) throw new Error("provider down");
+    if (drillOverride) {
+      return {
+        questions: drillOverride.slice(0, input.count),
+      } satisfies DrillBatchModel;
+    }
+    return {
+      questions: pickBankDrillQuestions(input),
+    } satisfies DrillBatchModel;
+  },
 };
 
 let server: Server;
@@ -121,9 +151,13 @@ afterAll(async () => {
 
 beforeEach(() => {
   scenarioCache.clear();
+  drillCache.clear();
   generateCalls = [];
   lastScenario = undefined;
   refuse = false;
+  drillCalls = [];
+  drillOverride = null;
+  drillFails = false;
 });
 
 async function postJson<T>(
@@ -324,5 +358,151 @@ describe("POST /api/chat with custom scenarios", () => {
     expect(result.status).toBe(400);
     expect(failure.error.code).toBe("invalid_request");
     expect(lastScenario).toBeUndefined();
+  });
+});
+
+describe("POST /api/drills/generate", () => {
+  const topics = [
+    "articles",
+    "cases",
+    "prepositions",
+    "verb_position",
+    "separable_verbs",
+    "subordinate_clauses",
+    "plurals",
+  ] as const;
+
+  const grammarTopic = {
+    articles: "articles",
+    cases: "cases",
+    prepositions: "prepositions",
+    verb_position: "word_order",
+    separable_verbs: "word_order",
+    subordinate_clauses: "word_order",
+    plurals: "articles",
+  } as const;
+
+  it("returns ten validated, unique questions for every topic", async () => {
+    for (const topic of topics) {
+      const result = await postJson<DrillResponse>(
+        "/api/drills/generate",
+        { topic, level: "A2" },
+      );
+      const body = expectSuccess(result);
+
+      expect(result.status).toBe(200);
+      expect(body.data.questions).toHaveLength(10);
+      expect(body.data.fallbackCount).toBe(0);
+      expect(body.meta).toMatchObject({ mode: "demo", cached: false });
+
+      const stems = new Set<string>();
+      for (const question of body.data.questions) {
+        expect(question.topic).toBe(topic);
+        expect(question.grammarTopic).toBe(grammarTopic[topic]);
+        expect(question.level).toBe("A2");
+        expect(question.options).toHaveLength(4);
+        expect(
+          new Set(question.options.map((option) => option.toLowerCase())).size,
+        ).toBe(4);
+        expect(question.options).toContain(question.correctAnswer);
+        expect(
+          question.options.filter(
+            (option) => option === question.correctAnswer,
+          ),
+        ).toHaveLength(1);
+        expect(question.promptBefore.length + question.promptAfter.length).toBeGreaterThan(
+          0,
+        );
+        stems.add(`${question.promptBefore} ${question.promptAfter}`);
+      }
+      expect(stems.size).toBe(10);
+    }
+
+    expect(drillCalls).toHaveLength(topics.length);
+  });
+
+  it("caches normalized requests and regenerates only when asked", async () => {
+    const base = {
+      topic: "cases",
+      level: "A2",
+      weakSpots: [
+        { pattern: "Dative-Article", count: 2 },
+        { pattern: "weil-verb-final", count: 1 },
+      ],
+    };
+    const first = await postJson<DrillResponse>("/api/drills/generate", base);
+    const second = await postJson<DrillResponse>("/api/drills/generate", {
+      ...base,
+      weakSpots: [
+        { pattern: "weil verb final", count: 1 },
+        { pattern: "dative article", count: 2 },
+      ],
+    });
+
+    expectSuccess(first);
+    const cachedBody = expectSuccess(second);
+    expect(cachedBody.meta?.cached).toBe(true);
+    expect(drillCalls).toHaveLength(1);
+
+    const regenerated = await postJson<DrillResponse>(
+      "/api/drills/generate",
+      { ...base, forceRegenerate: true },
+    );
+    expect(expectSuccess(regenerated).meta?.cached).toBe(false);
+    expect(drillCalls).toHaveLength(2);
+  });
+
+  it("discards invalid items, asks once for replacements, then fills from the bank", async () => {
+    const valid = pickBankDrillQuestions({
+      topic: "articles",
+      level: "A1",
+      count: 1,
+    })[0];
+    if (!valid) throw new Error("Expected a fallback question.");
+
+    const invalid: DrillQuestionModel = {
+      ...valid,
+      pattern: "duplicate-options",
+      options: [valid.options[0]!, valid.options[0]!, valid.options[2]!, valid.options[3]!],
+      correct_answer: valid.options[0]!,
+    };
+    drillOverride = [valid, invalid];
+
+    const result = await postJson<DrillResponse>("/api/drills/generate", {
+      topic: "articles",
+      level: "A1",
+    });
+    const body = expectSuccess(result);
+
+    expect(body.data.questions).toHaveLength(10);
+    expect(body.data.fallbackCount).toBe(9);
+    expect(drillCalls).toHaveLength(2);
+    expect(drillCalls[1]?.excludePrompts).toHaveLength(1);
+  });
+
+  it("returns a friendly Arabic error when the provider fails", async () => {
+    drillFails = true;
+    const result = await postJson("/api/drills/generate", {
+      topic: "plurals",
+      level: "A1",
+    });
+    const failure = expectFailure(result);
+
+    expect(result.status).toBe(502);
+    expect(failure.error.code).toBe("drill_generation_failed");
+    expect(failure.error.message).toContain("جرّب تاني");
+    expect(drillCalls).toHaveLength(1);
+  });
+
+  it("rejects unknown topics before calling the provider", async () => {
+    const result = await postJson("/api/drills/generate", {
+      topic: "vocabulary",
+      level: "A2",
+    });
+    const failure = expectFailure(result);
+
+    expect(result.status).toBe(400);
+    expect(failure.error.code).toBe("invalid_request");
+    expect(drillCalls).toHaveLength(0);
   });
 });

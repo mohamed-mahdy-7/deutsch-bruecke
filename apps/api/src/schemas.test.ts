@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   chatRequestSchema,
   customScenarioSchema,
+  drillBatchModelSchema,
+  drillRequestSchema,
+  drillResponseSchema,
   scenarioModelResponseSchema,
   scenarioRequestSchema,
 } from "./schemas.js";
@@ -166,6 +169,145 @@ describe("chatRequestSchema custom scenarios", () => {
           ],
         },
       }),
+    ).toThrow();
+  });
+});
+
+const drillQuestion = {
+  pattern: "dative-article-feminine",
+  prompt_before: "Ich helfe",
+  prompt_after: "Frau.",
+  hint_ar: "الفعل ده بياخد Dativ.",
+  options: ["der", "die", "den", "dem"],
+  correct_answer: "der",
+  translation_ar: "أنا بساعد الست.",
+  explanation_ar: "«helfen» + Dativ، والمؤنّث بيبقى «der».",
+  weak_spot_ar: "Dativ للمؤنّث",
+};
+
+describe("drillRequestSchema", () => {
+  it("accepts every practice topic and applies safe defaults", () => {
+    const parsed = drillRequestSchema.parse({
+      topic: "subordinate_clauses",
+      level: "B1",
+    });
+
+    expect(parsed).toMatchObject({
+      topic: "subordinate_clauses",
+      level: "B1",
+      weakSpots: [],
+      forceRegenerate: false,
+    });
+  });
+
+  it("accepts weak spots with optional labels", () => {
+    const parsed = drillRequestSchema.parse({
+      topic: "cases",
+      level: "A2",
+      weakSpots: [
+        { pattern: "dative-article", count: 3, labelAr: "Dativ" },
+      ],
+    });
+
+    expect(parsed.weakSpots[0]).toMatchObject({
+      pattern: "dative-article",
+      count: 3,
+      labelAr: "Dativ",
+    });
+  });
+
+  it("rejects unknown topics and invalid levels", () => {
+    expect(() =>
+      drillRequestSchema.parse({ topic: "vocabulary", level: "A2" }),
+    ).toThrow();
+    expect(() =>
+      drillRequestSchema.parse({ topic: "cases", level: "C1" }),
+    ).toThrow();
+  });
+
+  it("caps the weak-spot payload at twenty entries", () => {
+    expect(() =>
+      drillRequestSchema.parse({
+        topic: "cases",
+        level: "A2",
+        weakSpots: Array.from({ length: 21 }, (_, index) => ({
+          pattern: `pattern-${index}`,
+          count: 1,
+        })),
+      }),
+    ).toThrow();
+  });
+});
+
+describe("drillBatchModelSchema", () => {
+  it("accepts four distinct options and missing English fields", () => {
+    const parsed = drillBatchModelSchema.parse({
+      questions: [drillQuestion],
+    });
+
+    expect(parsed.questions[0]).toMatchObject({
+      pattern: "dative-article-feminine",
+      options: ["der", "die", "den", "dem"],
+      correct_answer: "der",
+    });
+    expect(parsed.questions[0]?.hint_en).toBeUndefined();
+  });
+
+  it("rejects batches with the wrong option count", () => {
+    expect(() =>
+      drillBatchModelSchema.parse({
+        questions: [{ ...drillQuestion, options: ["der", "die", "den"] }],
+      }),
+    ).toThrow();
+    expect(() =>
+      drillBatchModelSchema.parse({
+        questions: [
+          { ...drillQuestion, options: ["der", "die", "den", "dem", "des"] },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects empty batches", () => {
+    expect(() =>
+      drillBatchModelSchema.parse({ questions: [] }),
+    ).toThrow();
+  });
+});
+
+describe("drillResponseSchema", () => {
+  it("accepts the public camelCase shape", () => {
+    const parsed = drillResponseSchema.parse({
+      fallbackCount: 2,
+      questions: [
+        {
+          id: "drill_1",
+          topic: "cases",
+          grammarTopic: "cases",
+          pattern: "dative-article",
+          level: "A2",
+          promptBefore: "Ich helfe",
+          promptAfter: "Frau.",
+          hintAr: "تلميح",
+          hintEn: "Hint",
+          options: ["der", "die", "den", "dem"],
+          correctAnswer: "der",
+          translationAr: "أنا بساعد الست.",
+          translationEn: "I help the woman.",
+          explanationAr: "شرح",
+          explanationEn: "Explanation",
+          weakSpotAr: "Dativ",
+          weakSpotEn: "Dative",
+        },
+      ],
+    });
+
+    expect(parsed.questions[0]?.grammarTopic).toBe("cases");
+  });
+
+  it("rejects an invalid practice topic", () => {
+    expect(() =>
+      drillResponseSchema.parse({ questions: [], fallbackCount: 0 }),
     ).toThrow();
   });
 });

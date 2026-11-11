@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { env } from "@/config/env";
-import type { CefrLevel, NativeDialect } from "@/types/domain";
+import type { CefrLevel, DrillTopic, NativeDialect } from "@/types/domain";
 
 /* ------------------------------------------------------------------ */
 /* Contracts (mirrors apps/api/src/schemas.ts)                         */
@@ -107,6 +107,47 @@ const generatedScenarioSchema = z.object({
   opening_message_ar: z.string(),
 });
 
+const drillTopicSchema = z.enum([
+  "articles",
+  "cases",
+  "prepositions",
+  "verb_position",
+  "separable_verbs",
+  "subordinate_clauses",
+  "plurals",
+]);
+
+const generatedDrillQuestionSchema = z.object({
+  id: z.string(),
+  topic: drillTopicSchema,
+  grammarTopic: z.enum([
+    "articles",
+    "cases",
+    "word_order",
+    "vocabulary",
+    "prepositions",
+  ]),
+  pattern: z.string(),
+  level: z.enum(["A1", "A2", "B1"]),
+  promptBefore: z.string(),
+  promptAfter: z.string(),
+  hintAr: z.string(),
+  hintEn: z.string(),
+  options: z.array(z.string()).length(4),
+  correctAnswer: z.string(),
+  translationAr: z.string(),
+  translationEn: z.string(),
+  explanationAr: z.string(),
+  explanationEn: z.string(),
+  weakSpotAr: z.string(),
+  weakSpotEn: z.string(),
+});
+
+const drillResponseSchema = z.object({
+  questions: z.array(generatedDrillQuestionSchema).min(1).max(10),
+  fallbackCount: z.number().int().min(0).max(10),
+});
+
 const healthResponseSchema = z.object({
   status: z.string(),
   ai: z.enum(["live", "demo", "unavailable"]),
@@ -128,12 +169,26 @@ export type SimplifyAiResponse = z.infer<typeof simplifyResponseSchema>;
 export type TranslateAiResponse = z.infer<typeof translateResponseSchema>;
 export type WordAiResponse = z.infer<typeof wordResponseSchema>;
 export type GeneratedScenario = z.infer<typeof generatedScenarioSchema>;
+export type DrillAiQuestion = z.infer<typeof generatedDrillQuestionSchema>;
+export type DrillAiResponse = z.infer<typeof drillResponseSchema>;
 
 export interface ScenarioGenerationInput {
   idea: string;
   level?: CefrLevel;
   formality?: "du" | "Sie";
   tone: "friendly" | "strict";
+  forceRegenerate?: boolean;
+}
+
+export interface DrillGenerationInput {
+  topic: DrillTopic;
+  level: CefrLevel;
+  weakSpots: Array<{
+    pattern: string;
+    count: number;
+    labelAr?: string;
+    labelEn?: string;
+  }>;
   forceRegenerate?: boolean;
 }
 
@@ -259,6 +314,13 @@ export async function requestScenarioGeneration(
   return request("/scenarios/generate", generatedScenarioSchema, {
     body: input,
     timeoutMs: 60_000,
+  });
+}
+
+export async function requestDrillGeneration(input: DrillGenerationInput) {
+  return request("/drills/generate", drillResponseSchema, {
+    body: input,
+    timeoutMs: 75_000,
   });
 }
 

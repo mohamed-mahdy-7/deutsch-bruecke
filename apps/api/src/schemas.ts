@@ -2,6 +2,26 @@ import { z } from "zod";
 
 export const levels = ["A1", "A2", "B1"] as const;
 export const formalities = ["du", "Sie"] as const;
+export const grammarTopics = [
+  "articles",
+  "cases",
+  "word_order",
+  "vocabulary",
+  "prepositions",
+] as const;
+/**
+ * Practice categories shown in the grammar hub. Several AI categories share an
+ * existing grammar bucket so no Supabase check constraint has to change.
+ */
+export const drillTopics = [
+  "articles",
+  "cases",
+  "prepositions",
+  "verb_position",
+  "separable_verbs",
+  "subordinate_clauses",
+  "plurals",
+] as const;
 export const scenarioTones = ["friendly", "strict"] as const;
 export const dialects = [
   "egyptian",
@@ -189,6 +209,79 @@ export const wordResponseSchema = z.object({
   example_ar: z.string().trim().min(1).max(500),
 });
 
+/* ------------------------------------------------------------------ */
+/* AI drill contracts                                                  */
+/* ------------------------------------------------------------------ */
+
+export const drillWeakSpotSchema = z.object({
+  pattern: z.string().trim().min(1).max(80),
+  count: z.number().int().min(1).max(999).default(1),
+  labelAr: z.string().trim().max(160).optional(),
+  labelEn: z.string().trim().max(160).optional(),
+});
+
+export const drillRequestSchema = z.object({
+  topic: z.enum(drillTopics),
+  level: z.enum(levels),
+  /**
+   * Only patterns and counts drive generation. Labels are optional context so
+   * older clients keep working if the shape evolves.
+   */
+  weakSpots: z.array(drillWeakSpotSchema).max(20).default([]),
+  forceRegenerate: z.boolean().default(false),
+});
+
+/**
+ * Raw model contract. English fields are optional so a weaker model that only
+ * follows the Arabic instruction still yields usable questions; the endpoint
+ * fills those fields defensively.
+ */
+export const drillQuestionModelSchema = z.object({
+  pattern: z.string().trim().min(2).max(80),
+  prompt_before: z.string().trim().max(240).default(""),
+  prompt_after: z.string().trim().max(240).default(""),
+  hint_ar: z.string().trim().min(1).max(300),
+  hint_en: z.string().trim().max(300).optional(),
+  options: z.array(z.string().trim().min(1).max(120)).length(4),
+  correct_answer: z.string().trim().min(1).max(120),
+  translation_ar: z.string().trim().min(1).max(400),
+  translation_en: z.string().trim().max(400).optional(),
+  explanation_ar: z.string().trim().min(1).max(700),
+  explanation_en: z.string().trim().max(700).optional(),
+  weak_spot_ar: z.string().trim().min(1).max(160),
+  weak_spot_en: z.string().trim().max(160).optional(),
+});
+
+export const drillBatchModelSchema = z.object({
+  questions: z.array(drillQuestionModelSchema).min(1).max(10),
+});
+
+/** Public camelCase question consumed by the web app. */
+export const drillQuestionResponseSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+  topic: z.enum(drillTopics),
+  grammarTopic: z.enum(grammarTopics),
+  pattern: z.string().trim().min(2).max(80),
+  level: z.enum(levels),
+  promptBefore: z.string().trim().max(240),
+  promptAfter: z.string().trim().max(240),
+  hintAr: z.string().trim().min(1).max(300),
+  hintEn: z.string().trim().min(1).max(300),
+  options: z.array(z.string().trim().min(1).max(120)).length(4),
+  correctAnswer: z.string().trim().min(1).max(120),
+  translationAr: z.string().trim().min(1).max(400),
+  translationEn: z.string().trim().min(1).max(400),
+  explanationAr: z.string().trim().min(1).max(700),
+  explanationEn: z.string().trim().min(1).max(700),
+  weakSpotAr: z.string().trim().min(1).max(160),
+  weakSpotEn: z.string().trim().min(1).max(160),
+});
+
+export const drillResponseSchema = z.object({
+  questions: z.array(drillQuestionResponseSchema).min(1).max(10),
+  fallbackCount: z.number().int().min(0).max(10),
+});
+
 export type TutorResponse = z.infer<typeof tutorResponseSchema>;
 export type Mistake = z.infer<typeof mistakeSchema>;
 export type AssistAction = z.infer<typeof assistRequestSchema>["action"];
@@ -203,3 +296,13 @@ export type ExplainResponse = z.infer<typeof explainResponseSchema>;
 export type SimplifyResponse = z.infer<typeof simplifyResponseSchema>;
 export type TranslateResponse = z.infer<typeof translateResponseSchema>;
 export type WordResponse = z.infer<typeof wordResponseSchema>;
+export type GrammarTopic = (typeof grammarTopics)[number];
+export type DrillTopic = (typeof drillTopics)[number];
+export type DrillWeakSpot = z.infer<typeof drillWeakSpotSchema>;
+export type DrillRequest = z.infer<typeof drillRequestSchema>;
+export type DrillQuestionModel = z.infer<typeof drillQuestionModelSchema>;
+export type DrillBatchModel = z.infer<typeof drillBatchModelSchema>;
+export type DrillQuestionResponse = z.infer<
+  typeof drillQuestionResponseSchema
+>;
+export type DrillResponse = z.infer<typeof drillResponseSchema>;
