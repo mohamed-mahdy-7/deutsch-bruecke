@@ -219,6 +219,8 @@ function MobileDrawer({
 }) {
   const { t } = useSettings();
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
@@ -237,7 +239,7 @@ function MobileDrawer({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !panelRef.current) return;
@@ -270,7 +272,7 @@ function MobileDrawer({
       document.body.style.overflow = previousOverflow;
       previousFocus?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
