@@ -14,9 +14,16 @@
     "build": "npm run build --workspace @bruecke/api && npm run build --workspace @bruecke/web",
     "preview": "concurrently -k -n api,web -c cyan,magenta \"npm run start --workspace @bruecke/api\" \"npm run preview --workspace @bruecke/web\"",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "native:build": "npm run build --workspace @bruecke/web",
+    "cap:sync": "npm run native:build && cap sync",
+    "cap:android": "npm run cap:sync && cap open android",
+    "cap:ios": "npm run cap:sync && cap open ios"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/ios": "^8.6.0",
     "concurrently": "^9.1.2"
   }
 }

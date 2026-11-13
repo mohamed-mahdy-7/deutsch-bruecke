@@ -202,7 +202,7 @@ export function AuthPage() {
       </div>
 
       <div className="flex flex-col">
-        <header className="flex h-16 items-center justify-between px-4 sm:px-6">
+        <header className="safe-top flex min-h-16 items-center justify-between px-4 sm:px-6">
           <Link
             to="/"
             className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-bold text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
@@ -239,7 +239,7 @@ export function AuthPage() {
                       setConfirmation(null);
                     }}
                     aria-pressed={tab === item.id}
-                    className={`min-h-9 flex-1 rounded-xl px-3 text-xs font-bold transition-all sm:text-sm ${
+                    className={`touch-target min-h-9 flex-1 rounded-xl px-3 text-xs font-bold transition-all sm:text-sm ${
                       tab === item.id
                         ? "bg-card text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground"

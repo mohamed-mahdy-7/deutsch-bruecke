@@ -34,7 +34,7 @@ export function SpeakerButton({
       aria-label={speaking ? t("common.stop") : ariaLabel}
       title={supported ? ariaLabel : t("vocab.audioUnsupported")}
       className={cn(
-        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40",
+        "touch-target inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40",
         variant === "outline" && "border border-border bg-card",
         speaking && "bg-primary-soft text-primary",
         className,

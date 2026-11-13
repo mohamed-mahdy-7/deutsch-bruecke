@@ -6,8 +6,11 @@ import {
   BookOpen,
   Clock3,
   Flame,
+  GraduationCap,
+  Headphones,
   Layers,
   MessageCircle,
+  Mic,
   Play,
   RotateCcw,
   Sparkles,
@@ -21,6 +24,12 @@ import { useProgress, useTodayActivity } from "@/state/ProgressProvider";
 import { customScenarioToScenario } from "@/services/customScenarioMapping";
 import { dueCards } from "@/lib/srs";
 import { sortWeakSpots } from "@/lib/adaptive";
+import {
+  curriculumLessonNumbers,
+  nextCurriculumLesson,
+  overallCurriculumProgress,
+} from "@/lib/curriculum";
+import { CURRICULUM_UNITS } from "@/data/curriculum";
 import { LEVEL_LABEL_KEY, weakSpotHref } from "@/lib/uiLabels";
 import { SCENARIO_THEME } from "@/lib/scenarioTheme";
 import { percent } from "@/lib/utils";
@@ -67,6 +76,25 @@ export function DashboardPage() {
 
   const displayName = profile.displayName.trim() || t("profile.guest");
   const nextTheme = SCENARIO_THEME[nextScenario.color];
+
+  const completions = progress.curriculumCompletions;
+  const curriculumProgress = overallCurriculumProgress(completions);
+  const curriculumNumbers = curriculumLessonNumbers(completions);
+  const nextLesson = nextCurriculumLesson(completions);
+  const nextLessonUnit = nextLesson
+    ? CURRICULUM_UNITS.find((unit) => unit.id === nextLesson.unitId)
+    : null;
+  const nextLessonTitle = nextLesson
+    ? language === "ar"
+      ? nextLesson.titleAr
+      : nextLesson.titleEn
+    : null;
+  const nextLessonUnitTitle = nextLessonUnit
+    ? language === "ar"
+      ? nextLessonUnit.titleAr
+      : nextLessonUnit.titleEn
+    : null;
+  const levelQuery = `?level=${profile.level}`;
 
   return (
     <div className="animate-fade-up">
@@ -263,6 +291,123 @@ export function DashboardPage() {
 
       <section className="mt-6">
         <SectionHeader
+          title={t("dashboard.curriculumTitle")}
+          subtitle={t("dashboard.curriculumBody")}
+          action={
+            <Link
+              to="/curriculum"
+              className="text-xs font-bold text-primary hover:underline"
+            >
+              {t("common.viewAll")}
+            </Link>
+          }
+        />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <Link
+            to={
+              nextLesson?.activities[0]?.href ??
+              "/curriculum"
+            }
+            className="surface-card group flex flex-col justify-between gap-4 p-4 transition-all hover:-translate-y-0.5 hover:shadow-lift sm:col-span-2 xl:col-span-1"
+          >
+            <div className="flex items-start gap-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-soft text-primary">
+                <GraduationCap className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="flex items-center gap-1 text-sm font-extrabold">
+                  {t("dashboard.curriculumTitle")}
+                  <ArrowRight
+                    className="h-3.5 w-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5 flip-rtl"
+                    aria-hidden="true"
+                  />
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {nextLesson
+                    ? `${nextLessonUnitTitle} · ${nextLessonTitle}`
+                    : t("curriculum.allDoneBody")}
+                </p>
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2 text-[0.7rem] font-bold text-muted-foreground">
+                <span>
+                  {t("curriculum.lessonsDone", {
+                    done: curriculumNumbers.completed,
+                    total: curriculumNumbers.total,
+                  })}
+                </span>
+                <span>{curriculumProgress.percent}%</span>
+              </div>
+              <ProgressBar
+                value={curriculumProgress.percent}
+                className="mt-1.5 h-1.5"
+                label={t("curriculum.overall")}
+              />
+              <span className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-primary">
+                {nextLesson
+                  ? t("dashboard.continueLesson")
+                  : t("curriculum.allDone")}
+                <ArrowRight
+                  className="h-3.5 w-3.5 flip-rtl"
+                  aria-hidden="true"
+                />
+              </span>
+            </div>
+          </Link>
+
+          <Link
+            to={`/listening${levelQuery}`}
+            className="surface-card group flex items-start gap-3 p-4 transition-all hover:-translate-y-0.5 hover:shadow-lift"
+          >
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-masc/10 text-masc">
+              <Headphones className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <span className="min-w-0">
+              <span className="flex items-center gap-1 text-sm font-bold">
+                {t("dashboard.listeningTitle")}
+                <ArrowRight
+                  className="h-3.5 w-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5 flip-rtl"
+                  aria-hidden="true"
+                />
+              </span>
+              <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                {t("dashboard.listeningBody")}
+              </span>
+              <span className="mt-2 inline-block text-xs font-bold text-primary">
+                {t("dashboard.openListening")}
+              </span>
+            </span>
+          </Link>
+
+          <Link
+            to={`/pronunciation${levelQuery}`}
+            className="surface-card group flex items-start gap-3 p-4 transition-all hover:-translate-y-0.5 hover:shadow-lift"
+          >
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent-soft-foreground">
+              <Mic className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <span className="min-w-0">
+              <span className="flex items-center gap-1 text-sm font-bold">
+                {t("dashboard.pronunciationTitle")}
+                <ArrowRight
+                  className="h-3.5 w-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5 flip-rtl"
+                  aria-hidden="true"
+                />
+              </span>
+              <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                {t("dashboard.pronunciationBody")}
+              </span>
+              <span className="mt-2 inline-block text-xs font-bold text-primary">
+                {t("dashboard.openPronunciation")}
+              </span>
+            </span>
+          </Link>
+        </div>
+      </section>
+
+      <section className="mt-6">
+        <SectionHeader
           title={t("dash.quickTitle")}
           subtitle={t("dash.quickBody")}
         />
@@ -325,7 +470,7 @@ export function DashboardPage() {
             action={
               <Link
                 to="/progress"
-                className="text-xs font-bold text-primary hover:underline"
+                className="touch-target text-xs font-bold text-primary hover:underline"
               >
                 {t("common.viewAll")}
               </Link>

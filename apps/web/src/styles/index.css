@@ -265,6 +265,12 @@
     @apply -translate-y-0.5 border-primary/40 shadow-md;
   }
 
+  @media (pointer: coarse) {
+    .answer-chip {
+      min-height: 2.75rem;
+    }
+  }
+
   .answer-chip-selected {
     @apply border-primary/50 bg-primary-soft text-primary;
   }
@@ -283,6 +289,10 @@
   .star-pattern {
     background-image: radial-gradient(hsl(var(--primary) / 0.22) 1px, transparent 1px);
     background-size: 18px 18px;
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
   }
 
   .safe-bottom {
@@ -328,6 +338,14 @@
 
   .no-scrollbar::-webkit-scrollbar {
     display: none;
+  }
+
+  /* Keep tap targets comfortable on touch devices without bloating desktop. */
+  @media (pointer: coarse) {
+    .touch-target {
+      min-height: 2.75rem;
+      min-width: 2.75rem;
+    }
   }
 
   .tnum {

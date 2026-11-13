@@ -8,7 +8,10 @@ import {
 } from "./data/scenarios.js";
 import { AppError } from "./lib/errors.js";
 import { asyncHandler, errorHandler, notFoundHandler } from "./lib/http.js";
+import { metrics } from "./lib/metrics.js";
 import { createRateLimiter } from "./middleware/rateLimit.js";
+import { rateLimitStoreStatus } from "./middleware/rateLimitStore.js";
+import { requestObservability } from "./middleware/observability.js";
 import {
   assistRequestSchema,
   chatRequestSchema,
@@ -34,11 +37,32 @@ export interface CreateAppOptions {
   gateway?: AiGateway;
 }
 
+function recordAiRequest(endpoint: string, gateway: AiGateway): void {
+  metrics.increment("ai_requests_total", {
+    endpoint,
+    mode: gateway.mode,
+  });
+}
+
+function recordCacheEvent(
+  cache: "scenario" | "drill",
+  cached: boolean,
+  forced: boolean,
+): void {
+  metrics.increment("ai_cache_events_total", {
+    cache,
+    result: forced ? "bypass" : cached ? "hit" : "miss",
+  });
+}
+
 export function createApp(options: CreateAppOptions = {}): express.Express {
   const app = express();
   const resolveGateway = (): AiGateway => options.gateway ?? getAiGateway();
 
   app.disable("x-powered-by");
+  // Observability runs before anything that can fail so every response,
+  // including CORS and parser errors, carries an id and a metric.
+  app.use(requestObservability());
   app.set("trust proxy", config.trustProxy ? 1 : false);
   app.use(helmet());
   app.use(
@@ -54,20 +78,59 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   );
   app.use(express.json({ limit: "32kb" }));
 
-  const chatLimiter = createRateLimiter(config.rateLimits.chat);
-  const assistLimiter = createRateLimiter(config.rateLimits.assist);
-  const wordLimiter = createRateLimiter(config.rateLimits.word);
-  const scenarioLimiter = createRateLimiter(config.rateLimits.scenario);
-  const drillLimiter = createRateLimiter(config.rateLimits.drill);
+  const chatLimiter = createRateLimiter({
+    name: "chat",
+    ...config.rateLimits.chat,
+  });
+  const assistLimiter = createRateLimiter({
+    name: "assist",
+    ...config.rateLimits.assist,
+  });
+  const wordLimiter = createRateLimiter({
+    name: "word",
+    ...config.rateLimits.word,
+  });
+  const scenarioLimiter = createRateLimiter({
+    name: "scenario",
+    ...config.rateLimits.scenario,
+  });
+  const drillLimiter = createRateLimiter({
+    name: "drill",
+    ...config.rateLimits.drill,
+  });
 
   app.get("/api/health", (_req, res) => {
+    res.setHeader("cache-control", "no-store");
     res.json({
       ok: true,
       data: {
         status: "ok",
         ai: config.aiMode,
         provider: config.aiProvider,
+        environment: config.nodeEnv,
         timestamp: new Date().toISOString(),
+        uptimeSeconds: Math.round(process.uptime()),
+        requestCount: metrics.total("http_requests_total"),
+        rateLimitStore: rateLimitStoreStatus(),
+        cache: {
+          scenarioEntries: scenarioCache.size,
+          drillEntries: drillCache.size,
+        },
+      },
+    });
+  });
+
+  app.get("/api/metrics", (_req, res) => {
+    res.setHeader("cache-control", "no-store");
+    res.json({
+      ok: true,
+      data: {
+        ...metrics.snapshot(),
+        rateLimitStore: rateLimitStoreStatus(),
+        cache: {
+          scenarioEntries: scenarioCache.size,
+          drillEntries: drillCache.size,
+        },
       },
     });
   });
@@ -103,6 +166,9 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
         input.forceRegenerate,
       );
 
+      recordAiRequest("/api/scenarios/generate", gateway);
+      recordCacheEvent("scenario", result.cached, Boolean(input.forceRegenerate));
+
       res.json({
         ok: true,
         data: result.value,
@@ -131,6 +197,8 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
 
       // Defensive validation at the transport boundary, mirroring /api/assist.
       drillResponseSchema.parse(result.value);
+      recordAiRequest("/api/drills/generate", gateway);
+      recordCacheEvent("drill", result.cached, Boolean(input.forceRegenerate));
       res.json({
         ok: true,
         data: result.value,
@@ -168,6 +236,7 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
         scenario,
       });
 
+      recordAiRequest("/api/chat", gateway);
       res.json({ ok: true, data, meta: { mode: gateway.mode } });
     }),
   );
@@ -194,6 +263,7 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
 
       // Defensive second validation at the transport boundary.
       outputSchema.parse(data);
+      recordAiRequest("/api/assist", gateway);
       res.json({ ok: true, data, meta: { mode: gateway.mode } });
     }),
   );
@@ -205,6 +275,7 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
       const input = wordRequestSchema.parse(req.body);
       const gateway = resolveGateway();
       const data = await gateway.word(input.word, input.context, input.level);
+      recordAiRequest("/api/word", gateway);
       res.json({ ok: true, data, meta: { mode: gateway.mode } });
     }),
   );

@@ -18,6 +18,9 @@ import { GrammarPage } from "@/pages/GrammarPage";
 import { BuilderPage } from "@/pages/BuilderPage";
 import { VocabularyPage } from "@/pages/VocabularyPage";
 import { VocabularyReviewPage } from "@/pages/VocabularyReviewPage";
+import { CurriculumPage } from "@/pages/CurriculumPage";
+import { ListeningPage } from "@/pages/ListeningPage";
+import { PronunciationPage } from "@/pages/PronunciationPage";
 import { ProgressPage } from "@/pages/ProgressPage";
 import { ProfilePage } from "@/pages/ProfilePage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
@@ -74,6 +77,12 @@ export function App() {
                   />
                   <Route path="/grammar" element={<GrammarPage />} />
                   <Route path="/builder" element={<BuilderPage />} />
+                  <Route path="/curriculum" element={<CurriculumPage />} />
+                  <Route path="/listening" element={<ListeningPage />} />
+                  <Route
+                    path="/pronunciation"
+                    element={<PronunciationPage />}
+                  />
                   <Route path="/vocabulary" element={<VocabularyPage />} />
                   <Route
                     path="/vocabulary/review"

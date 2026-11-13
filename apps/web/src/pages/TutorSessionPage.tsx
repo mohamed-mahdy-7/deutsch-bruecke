@@ -369,10 +369,10 @@ export function TutorSessionPage() {
         </Alert>
       ) : null}
 
-      <div className="surface-card mt-3 flex h-[68dvh] min-h-[28rem] flex-col overflow-hidden p-0">
+      <div className="surface-card mt-3 flex h-[calc(100dvh-9rem)] min-h-[24rem] scroll-mt-20 flex-col overflow-hidden p-0 sm:h-[68dvh] sm:min-h-[28rem]">
         <div
           ref={scrollRef}
-          className="chat-scroll flex-1 space-y-4 overflow-y-auto p-3.5 sm:p-5"
+          className="chat-scroll min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-3.5 sm:p-5"
           aria-live="polite"
           aria-relevant="additions"
         >
@@ -501,6 +501,13 @@ export function TutorSessionPage() {
                       event.preventDefault();
                       submit();
                     }
+                  }}
+                  onFocus={() => {
+                    // Wait for the on-screen keyboard to resize the visual
+                    // viewport, then make sure the composer stays in view.
+                    window.setTimeout(() => {
+                      inputRef.current?.scrollIntoView({ block: "nearest" });
+                    }, 250);
                   }}
                   rows={2}
                   maxLength={500}

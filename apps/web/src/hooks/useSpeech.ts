@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import { TextToSpeech } from "@capacitor-community/text-to-speech";
+import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 
 /* ------------------------------------------------------------------ */
 /* Text-to-speech (German)                                             */
@@ -12,27 +15,72 @@ function pickGermanVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice |
   );
 }
 
+/**
+ * One hook for both targets: the Capacitor TTS plugin on Android/iOS and the
+ * Web Speech API in the browser. The rest of the app only knows speak/cancel.
+ */
 export function useSpeechSynthesis() {
+  const native = Capacitor.isNativePlatform();
   const supported =
-    typeof window !== "undefined" && "speechSynthesis" in window;
+    native ||
+    (typeof window !== "undefined" && "speechSynthesis" in window);
   const [speaking, setSpeaking] = useState(false);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const tokenRef = useRef(0);
 
   useEffect(() => {
     return () => {
-      if (supported) window.speechSynthesis.cancel();
+      tokenRef.current += 1;
+      if (native) {
+        void TextToSpeech.stop().catch(() => undefined);
+      } else if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
     };
-  }, [supported]);
+  }, [native]);
 
   const cancel = useCallback(() => {
+    tokenRef.current += 1;
+    if (native) {
+      void TextToSpeech.stop().catch(() => undefined);
+      setSpeaking(false);
+      return;
+    }
     if (!supported) return;
     window.speechSynthesis.cancel();
     setSpeaking(false);
-  }, [supported]);
+  }, [native, supported]);
 
   const speak = useCallback(
     (text: string, options?: { rate?: number; pitch?: number }) => {
       if (!supported || !text.trim()) return false;
+
+      if (native) {
+        const token = tokenRef.current + 1;
+        tokenRef.current = token;
+        void (async () => {
+          try {
+            await TextToSpeech.stop();
+            if (tokenRef.current !== token) return;
+            setSpeaking(true);
+            await TextToSpeech.speak({
+              text,
+              lang: "de-DE",
+              rate: options?.rate ?? 0.92,
+              pitch: options?.pitch ?? 1,
+              volume: 1,
+              category: "playback",
+            });
+          } catch {
+            // A missing German voice or an interrupted utterance should never
+            // crash a lesson; the UI simply returns to the idle state.
+          } finally {
+            if (tokenRef.current === token) setSpeaking(false);
+          }
+        })();
+        return true;
+      }
+
       const synth = window.speechSynthesis;
       synth.cancel();
 
@@ -54,7 +102,7 @@ export function useSpeechSynthesis() {
       setSpeaking(true);
       return true;
     },
-    [supported],
+    [native, supported],
   );
 
   return { supported, speaking, speak, cancel };
@@ -123,35 +171,105 @@ export interface UseSpeechRecognitionOptions {
 }
 
 /**
- * Small wrapper around the Web Speech API. Recognition is single-shot, which
- * suits chat dictation: the learner speaks one German message and edits it.
+ * Small wrapper around the Web Speech API and the native Capacitor plugin.
+ * Recognition is single-shot, which suits chat dictation and phrase practice:
+ * the learner speaks one German message and edits it.
  */
 export function useSpeechRecognition({
   language = "de-DE",
   onTranscript,
   onError,
 }: UseSpeechRecognitionOptions = {}) {
+  const native = Capacitor.isNativePlatform();
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const lastPartialRef = useRef("");
   const [listening, setListening] = useState(false);
-  const [supported] = useState<boolean>(
-    () => getRecognitionConstructor() !== null,
+  const [supported, setSupported] = useState<boolean>(
+    () => native || getRecognitionConstructor() !== null,
   );
   const callbacksRef = useRef({ onTranscript, onError });
   callbacksRef.current = { onTranscript, onError };
+
+  // The native plugin can report that speech recognition is unavailable (for
+  // example, a device without a speech service). Trust that answer.
+  useEffect(() => {
+    if (!native) return;
+    let cancelled = false;
+    void SpeechRecognition.available()
+      .then(({ available }) => {
+        if (!cancelled) setSupported(available);
+      })
+      .catch(() => {
+        if (!cancelled) setSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [native]);
 
   useEffect(() => {
     return () => {
       recognitionRef.current?.abort();
       recognitionRef.current = null;
+      if (native) {
+        void SpeechRecognition.stop().catch(() => undefined);
+        void SpeechRecognition.removeAllListeners().catch(() => undefined);
+      }
     };
-  }, []);
+  }, [native]);
 
   const stop = useCallback(() => {
+    if (native) {
+      void SpeechRecognition.stop().catch(() => undefined);
+      setListening(false);
+      return;
+    }
     recognitionRef.current?.stop();
     setListening(false);
-  }, []);
+  }, [native]);
 
-  const start = useCallback(() => {
+  const start = useCallback(async () => {
+    if (native) {
+      try {
+        const permission = await SpeechRecognition.checkPermissions();
+        if (permission.speechRecognition !== "granted") {
+          const requested = await SpeechRecognition.requestPermissions();
+          if (requested.speechRecognition !== "granted") {
+            callbacksRef.current.onError?.("not-allowed");
+            return false;
+          }
+        }
+
+        await SpeechRecognition.removeAllListeners();
+        lastPartialRef.current = "";
+        await SpeechRecognition.addListener("partialResults", (data) => {
+          const text = (data.matches[0] ?? "").trim();
+          if (!text) return;
+          lastPartialRef.current = text;
+          callbacksRef.current.onTranscript?.(text, false);
+        });
+        await SpeechRecognition.addListener("listeningState", (data) => {
+          if (data.status !== "stopped") return;
+          setListening(false);
+          const text = lastPartialRef.current.trim();
+          if (text) callbacksRef.current.onTranscript?.(text, true);
+        });
+
+        setListening(true);
+        await SpeechRecognition.start({
+          language,
+          maxResults: 3,
+          partialResults: true,
+          popup: false,
+        });
+        return true;
+      } catch {
+        setListening(false);
+        callbacksRef.current.onError?.("start_failed");
+        return false;
+      }
+    }
+
     const Recognition = getRecognitionConstructor();
     if (!Recognition) {
       callbacksRef.current.onError?.("unsupported");
@@ -197,7 +315,7 @@ export function useSpeechRecognition({
       callbacksRef.current.onError?.("start_failed");
       return false;
     }
-  }, [language]);
+  }, [language, native]);
 
   return { supported, listening, start, stop };
 }

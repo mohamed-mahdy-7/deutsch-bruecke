@@ -4,6 +4,7 @@ import type {
   VocabCard,
   WeakSpot,
 } from "@/types/domain";
+import { mergeCurriculumCompletions } from "@/lib/curriculum";
 
 function mergeVocabCard(remote: VocabCard, local: VocabCard): VocabCard {
   const remoteReviewed = remote.lastReviewedAt
@@ -157,5 +158,9 @@ export function mergeProgress(
     ),
     activity: [...activityMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
     streak,
+    curriculumCompletions: mergeCurriculumCompletions(
+      remote.curriculumCompletions ?? [],
+      local.curriculumCompletions ?? [],
+    ),
   };
 }

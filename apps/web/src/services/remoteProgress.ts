@@ -2,6 +2,7 @@ import type {
   CefrLevel,
   ChatMessage,
   Conversation,
+  CurriculumCompletion,
   DailyActivity,
   DrillResult,
   GrammarArticle,
@@ -115,6 +116,12 @@ interface ActivityRow {
   seconds: number | null;
 }
 
+interface CurriculumRow {
+  lesson_id: string;
+  completed_at: string;
+  score: number | null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -214,6 +221,29 @@ function throwIfError(error: { message: string; code?: string } | null): void {
   }
 }
 
+/**
+ * Phase 3 added a table via migration 003. Existing deployments that have not
+ * run it yet should still load and save all their old progress, so a missing
+ * curriculum table degrades to an empty list instead of an empty app.
+ */
+function isMissingRelation(error: { message: string; code?: string }): boolean {
+  return (
+    error.code === "42P01" ||
+    error.code === "PGRST205" ||
+    /does not exist|schema cache/i.test(error.message)
+  );
+}
+
+let warnedMissingCurriculum = false;
+
+function warnMissingCurriculum(): void {
+  if (warnedMissingCurriculum) return;
+  warnedMissingCurriculum = true;
+  console.warn(
+    "[sync] curriculum_completions is missing. Apply supabase/migrations/003_curriculum.sql; curriculum progress stays local until then.",
+  );
+}
+
 function chunk<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -237,6 +267,7 @@ export async function loadRemoteProgress(userId: string): Promise<ProgressState 
     conversationResult,
     streakResult,
     activityResult,
+    curriculumResult,
   ] = await Promise.all([
     supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle(),
     supabase.from("weak_spots").select("*").eq("user_id", userId),
@@ -255,6 +286,11 @@ export async function loadRemoteProgress(userId: string): Promise<ProgressState 
       .limit(30),
     supabase.from("streaks").select("*").eq("user_id", userId).maybeSingle(),
     supabase.from("daily_activity").select("*").eq("user_id", userId).order("date"),
+    supabase
+      .from("curriculum_completions")
+      .select("*")
+      .eq("user_id", userId)
+      .order("completed_at"),
   ]);
 
   for (const result of [
@@ -267,6 +303,14 @@ export async function loadRemoteProgress(userId: string): Promise<ProgressState 
     activityResult,
   ]) {
     throwIfError(result.error);
+  }
+
+  if (curriculumResult.error) {
+    if (isMissingRelation(curriculumResult.error)) {
+      warnMissingCurriculum();
+    } else {
+      throwIfError(curriculumResult.error);
+    }
   }
 
   const profile = profileResult.data as unknown as ProfileRow | null;
@@ -395,6 +439,16 @@ export async function loadRemoteProgress(userId: string): Promise<ProgressState 
     seconds: Number(row.seconds) || 0,
   }));
 
+  const curriculumCompletions: CurriculumCompletion[] = curriculumResult.error
+    ? []
+    : ((curriculumResult.data ?? []) as unknown as CurriculumRow[])
+        .filter((row) => typeof row.lesson_id === "string")
+        .map((row) => ({
+          lessonId: row.lesson_id,
+          completedAt: row.completed_at,
+          ...(typeof row.score === "number" ? { score: row.score } : {}),
+        }));
+
   const streak = streakResult.data as unknown as StreakRow | null;
 
   return {
@@ -421,6 +475,7 @@ export async function loadRemoteProgress(userId: string): Promise<ProgressState 
       longest: Number(streak?.longest_streak) || 0,
       lastPracticeDate: streak?.last_practice_date ?? null,
     },
+    curriculumCompletions,
   };
 }
 
@@ -503,6 +558,13 @@ export async function saveRemoteProgress(
     seconds: day.seconds,
   }));
 
+  const curriculumRows = state.curriculumCompletions.map((completion) => ({
+    user_id: userId,
+    lesson_id: completion.lessonId,
+    completed_at: completion.completedAt,
+    score: completion.score ?? null,
+  }));
+
   await Promise.all([
     weakRows.length > 0
       ? supabase.from("weak_spots").upsert(weakRows, { onConflict: "id" })
@@ -533,6 +595,19 @@ export async function saveRemoteProgress(
       throwIfError((result as { error: { message: string } | null }).error);
     }
   });
+
+  if (curriculumRows.length > 0) {
+    const curriculumSave = await supabase
+      .from("curriculum_completions")
+      .upsert(curriculumRows, { onConflict: "user_id,lesson_id" });
+    if (curriculumSave.error) {
+      if (isMissingRelation(curriculumSave.error)) {
+        warnMissingCurriculum();
+      } else {
+        throwIfError(curriculumSave.error);
+      }
+    }
+  }
 
   const conversationRows = state.conversations.map((conversation) => ({
     id: conversation.id,
@@ -611,6 +686,14 @@ export async function deleteRemoteProgress(userId: string): Promise<void> {
   for (const table of tables) {
     const result = await supabase.from(table).delete().eq("user_id", userId);
     throwIfError(result.error);
+  }
+
+  const curriculumDelete = await supabase
+    .from("curriculum_completions")
+    .delete()
+    .eq("user_id", userId);
+  if (curriculumDelete.error && !isMissingRelation(curriculumDelete.error)) {
+    throwIfError(curriculumDelete.error);
   }
   // Profiles are reset by the next sync (we keep the auth-linked row so the
   // trigger/foreign keys remain predictable).

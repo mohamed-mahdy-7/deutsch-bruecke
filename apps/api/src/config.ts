@@ -28,6 +28,9 @@ const nodeEnv = process.env.NODE_ENV ?? "development";
 const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
 const geminiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
 const demoRequested = process.env.AI_DEMO_MODE === "true";
+const redisUrl = process.env.REDIS_URL?.trim() ?? "";
+const rateLimitStoreRequested =
+  process.env.RATE_LIMIT_STORE?.trim().toLowerCase();
 
 export type AiProvider = "anthropic" | "gemini" | "demo";
 
@@ -99,6 +102,17 @@ export const config = {
   aiProvider,
   aiMode,
   trustProxy: process.env.TRUST_PROXY === "1",
+  redisUrl,
+  // Redis keeps counters shared across API instances. The limiter itself falls
+  // back to an in-memory store if Redis is down, so a cache outage never takes
+  // the API down with it.
+  rateLimitStore:
+    rateLimitStoreRequested === "memory"
+      ? ("memory" as const)
+      : redisUrl
+        ? ("redis" as const)
+        : ("memory" as const),
+  logRequests: nodeEnv !== "test" && process.env.LOG_REQUESTS !== "false",
   rateLimits: {
     chat: {
       windowMs: intFromEnv(process.env.CHAT_RATE_WINDOW_MINUTES, 15) * 60_000,

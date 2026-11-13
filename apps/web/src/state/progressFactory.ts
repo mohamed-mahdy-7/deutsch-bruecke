@@ -64,5 +64,6 @@ export function createDefaultProgress(
       longest: 0,
       lastPracticeDate: null,
     },
+    curriculumCompletions: [],
   };
 }

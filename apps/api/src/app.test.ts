@@ -18,6 +18,8 @@ import type {
 import type { AiGateway } from "./services/ai.js";
 import { drillCache } from "./services/drillCache.js";
 import { scenarioCache } from "./services/scenarioCache.js";
+import { config } from "./config.js";
+import { metrics } from "./lib/metrics.js";
 
 interface ApiSuccess<T> {
   ok: true;
@@ -30,6 +32,8 @@ interface ApiFailure {
   error: {
     code: string;
     message: string;
+    requestId?: string;
+    retryAfterSeconds?: number;
     details?: Array<{ path: string; message: string }>;
   };
 }
@@ -152,6 +156,7 @@ afterAll(async () => {
 beforeEach(() => {
   scenarioCache.clear();
   drillCache.clear();
+  metrics.reset();
   generateCalls = [];
   lastScenario = undefined;
   refuse = false;
@@ -171,6 +176,22 @@ async function postJson<T>(
   });
   return {
     status: response.status,
+    body: (await response.json()) as ApiSuccess<T> | ApiFailure,
+  };
+}
+
+async function getJson<T>(
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<{
+  status: number;
+  headers: Headers;
+  body: ApiSuccess<T> | ApiFailure;
+}> {
+  const response = await fetch(`${baseUrl}${path}`, { headers });
+  return {
+    status: response.status,
+    headers: response.headers,
     body: (await response.json()) as ApiSuccess<T> | ApiFailure,
   };
 }
@@ -504,5 +525,109 @@ describe("POST /api/drills/generate", () => {
     expect(result.status).toBe(400);
     expect(failure.error.code).toBe("invalid_request");
     expect(drillCalls).toHaveLength(0);
+  });
+});
+
+describe("observability endpoints", () => {
+  interface HealthData {
+    status: string;
+    ai: string;
+    provider: string;
+    environment: string;
+    timestamp: string;
+    uptimeSeconds: number;
+    requestCount: number;
+    rateLimitStore: string;
+    cache: { scenarioEntries: number; drillEntries: number };
+  }
+
+  interface MetricsData {
+    startedAt: string;
+    uptimeSeconds: number;
+    counters: Array<{
+      name: string;
+      labels: Record<string, string | number | boolean>;
+      value: number;
+    }>;
+    timings: Array<{
+      key: string;
+      count: number;
+      avgMs: number;
+      maxMs: number;
+    }>;
+    rateLimitStore: string;
+    cache: { scenarioEntries: number; drillEntries: number };
+  }
+
+  it("reports mode, uptime, request count, cache sizes and store status", async () => {
+    await postJson("/api/chat", {
+      scenarioId: "cafe",
+      level: "A1",
+      learnerMessage: "Guten Morgen!",
+    });
+
+    const result = await getJson<HealthData>("/api/health");
+    const body = expectSuccess(result);
+
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toBe("no-store");
+    expect(body.data).toMatchObject({
+      status: "ok",
+      ai: config.aiMode,
+      provider: config.aiProvider,
+      environment: config.nodeEnv,
+      cache: { scenarioEntries: 0, drillEntries: 0 },
+    });
+    expect(body.data.uptimeSeconds).toBeGreaterThanOrEqual(0);
+    expect(body.data.requestCount).toBeGreaterThanOrEqual(1);
+    expect(["disabled", "connected", "degraded"]).toContain(
+      body.data.rateLimitStore,
+    );
+  });
+
+  it("exposes AI request and cache counters as JSON", async () => {
+    await postJson("/api/scenarios/generate", { idea: "Hotel Zimmer" });
+    await postJson("/api/scenarios/generate", { idea: "Hotel Zimmer" });
+
+    const result = await getJson<MetricsData>("/api/metrics");
+    const body = expectSuccess(result);
+
+    const aiRequests = body.data.counters.find(
+      (counter) => counter.name === "ai_requests_total",
+    );
+    expect(aiRequests?.value).toBe(2);
+    expect(aiRequests?.labels).toMatchObject({
+      endpoint: "/api/scenarios/generate",
+      mode: "demo",
+    });
+
+    const cacheMetrics = body.data.counters.filter(
+      (counter) => counter.name === "ai_cache_events_total",
+    );
+    expect(
+      cacheMetrics.find((counter) => counter.labels.result === "miss")?.value,
+    ).toBe(1);
+    expect(
+      cacheMetrics.find((counter) => counter.labels.result === "hit")?.value,
+    ).toBe(1);
+
+    expect(body.data.cache.scenarioEntries).toBe(1);
+    expect(body.data.timings.length).toBeGreaterThan(0);
+  });
+
+  it("returns request ids on success and on errors", async () => {
+    const ok = await getJson("/api/health", {
+      "x-request-id": "health-trace-1234",
+    });
+    expect(ok.headers.get("x-request-id")).toBe("health-trace-1234");
+
+    const missing = await getJson("/api/does-not-exist", {
+      "x-request-id": "missing-trace-1234",
+    });
+    const failure = expectFailure(missing);
+
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("x-request-id")).toBe("missing-trace-1234");
+    expect(failure.error.requestId).toBe("missing-trace-1234");
   });
 });

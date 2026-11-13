@@ -397,7 +397,7 @@ export function ProfilePage() {
                     onClick={() => setLanguage(option.id)}
                     aria-pressed={language === option.id}
                     className={cn(
-                      "inline-flex min-h-10 items-center justify-center rounded-xl border text-sm font-extrabold transition-all",
+                      "touch-target inline-flex min-h-10 items-center justify-center rounded-xl border text-sm font-extrabold transition-all",
                       language === option.id
                         ? "border-primary/50 bg-primary-soft/60 text-primary shadow-sm"
                         : "border-border/70 bg-card hover:border-primary/30 hover:bg-muted/30",
@@ -421,7 +421,7 @@ export function ProfilePage() {
                       onClick={() => setTheme(option.id)}
                       aria-pressed={theme === option.id}
                       className={cn(
-                        "inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border px-2 text-xs font-bold transition-all",
+                        "touch-target inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border px-2 text-xs font-bold transition-all",
                         theme === option.id
                           ? "border-primary/50 bg-primary-soft/60 text-primary shadow-sm"
                           : "border-border/70 bg-card hover:border-primary/30 hover:bg-muted/30",

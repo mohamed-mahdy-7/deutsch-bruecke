@@ -143,7 +143,7 @@ export function OnboardingPage() {
 
   return (
     <div className="min-h-dvh">
-      <header className="flex h-16 items-center justify-between gap-3 border-b border-border/50 bg-background/80 px-4 backdrop-blur-md sm:px-6">
+      <header className="safe-top flex min-h-16 items-center justify-between gap-3 border-b border-border/50 bg-background/80 px-4 backdrop-blur-md sm:px-6">
         <Brand compact />
         <div className="flex items-center gap-0.5">
           <LanguageToggle />

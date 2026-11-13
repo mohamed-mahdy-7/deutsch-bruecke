@@ -11,6 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor-community/text-to-speech": "^8.0.2",
+    "@capacitor/core": "^8.6.0",
     "@fontsource-variable/cairo": "^5.1.1",
     "@fontsource-variable/inter": "^5.1.1",
     "@supabase/supabase-js": "^2.47.10",

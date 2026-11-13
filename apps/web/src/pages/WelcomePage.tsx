@@ -40,8 +40,8 @@ export function WelcomePage() {
 
   return (
     <div className="min-h-dvh overflow-x-hidden">
-      <header className="sticky top-0 z-30 border-b border-border/50 bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
+      <header className="safe-top sticky top-0 z-30 border-b border-border/50 bg-background/80 backdrop-blur-md">
+        <div className="mx-auto flex min-h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
           <Brand />
           <nav className="flex items-center gap-0.5" aria-label={t("aria.navigation")}>
             {configured ? (
@@ -57,7 +57,7 @@ export function WelcomePage() {
             <button
               type="button"
               onClick={start}
-              className={buttonCn("primary", "sm", "ms-1 hidden sm:inline-flex")}
+              className={buttonCn("primary", "md", "ms-1 hidden sm:inline-flex")}
             >
               {t("welcome.cta")}
             </button>

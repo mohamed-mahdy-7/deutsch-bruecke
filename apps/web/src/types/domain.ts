@@ -168,6 +168,13 @@ export interface Profile {
   createdAt: string;
 }
 
+export interface CurriculumCompletion {
+  lessonId: string;
+  completedAt: string;
+  /** Optional listening/pronunciation score for the lesson check. */
+  score?: number;
+}
+
 export interface ProgressState {
   version: 1;
   ownerId: string;
@@ -179,6 +186,155 @@ export interface ProgressState {
   conversations: Conversation[];
   activity: DailyActivity[];
   streak: StreakData;
+  curriculumCompletions: CurriculumCompletion[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Structured A1–B1 curriculum                                         */
+/* ------------------------------------------------------------------ */
+
+export type CurriculumActivityKind =
+  | "scenario"
+  | "grammar"
+  | "vocabulary"
+  | "builder"
+  | "listening"
+  | "pronunciation";
+
+export interface CurriculumActivity {
+  kind: CurriculumActivityKind;
+  href: string;
+  labelAr: string;
+  labelEn: string;
+}
+
+export interface CurriculumLesson {
+  id: string;
+  unitId: string;
+  level: CefrLevel;
+  /** 1-based position inside its unit. */
+  order: number;
+  titleAr: string;
+  titleEn: string;
+  summaryAr: string;
+  summaryEn: string;
+  goalAr: string;
+  goalEn: string;
+  minutes: number;
+  xp: number;
+  activities: CurriculumActivity[];
+}
+
+export interface CurriculumUnit {
+  id: string;
+  level: CefrLevel;
+  /** 1-based position across the full path. */
+  order: number;
+  titleAr: string;
+  titleEn: string;
+  descriptionAr: string;
+  descriptionEn: string;
+  theme: "teal" | "orange" | "blue" | "rose" | "green";
+  lessons: CurriculumLesson[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Listening dictation                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface DictationClip {
+  id: string;
+  level: CefrLevel;
+  titleAr: string;
+  titleEn: string;
+  textDe: string;
+  translationAr: string;
+  translationEn: string;
+  hintAr: string;
+  hintEn: string;
+  topic: GrammarTopic;
+  focusLabelAr: string;
+  focusLabelEn: string;
+}
+
+export type DictationWordStatus = "correct" | "wrong" | "missing" | "extra";
+
+export interface DictationWordDiff {
+  expected: string | null;
+  actual: string | null;
+  status: DictationWordStatus;
+}
+
+export interface DictationScore {
+  accuracy: number;
+  correctWords: number;
+  totalWords: number;
+  passed: boolean;
+  diff: DictationWordDiff[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Pronunciation coach                                                 */
+/* ------------------------------------------------------------------ */
+
+export type PronunciationSoundId =
+  | "ch"
+  | "sch"
+  | "ue"
+  | "oe"
+  | "ae"
+  | "r"
+  | "w"
+  | "v"
+  | "z"
+  | "ei"
+  | "ie"
+  | "eu"
+  | "sp_st"
+  | "final_er";
+
+export interface PronunciationSounds {
+  id: PronunciationSoundId;
+  symbol: string;
+  labelAr: string;
+  labelEn: string;
+  tipAr: string;
+  tipEn: string;
+}
+
+export interface PronunciationPhrase {
+  id: string;
+  level: CefrLevel;
+  textDe: string;
+  translationAr: string;
+  translationEn: string;
+  tipAr: string;
+  tipEn: string;
+  focus: PronunciationSoundId[];
+}
+
+export type PronunciationSoundStatus = "clear" | "almost" | "retry";
+
+export interface PronunciationSoundFeedback {
+  id: PronunciationSoundId;
+  symbol: string;
+  labelAr: string;
+  labelEn: string;
+  tipAr: string;
+  tipEn: string;
+  accuracy: number;
+  status: PronunciationSoundStatus;
+  words: string[];
+}
+
+export interface PronunciationScore {
+  accuracy: number;
+  wordAccuracy: number;
+  correctWords: number;
+  totalWords: number;
+  passed: boolean;
+  words: DictationWordDiff[];
+  sounds: PronunciationSoundFeedback[];
 }
 
 export type ScenarioId =

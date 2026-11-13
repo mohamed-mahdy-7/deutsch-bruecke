@@ -42,7 +42,7 @@ export function SegmentedTabs({
             aria-selected={active}
             onClick={() => onChange(item.id)}
             className={cn(
-              "inline-flex min-h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-1.5 text-xs font-bold transition-all sm:text-sm",
+              "inline-flex min-h-11 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-1.5 text-xs font-bold transition-all sm:min-h-9 sm:text-sm",
               stretch && "flex-1",
               active
                 ? "bg-card text-foreground shadow-sm"

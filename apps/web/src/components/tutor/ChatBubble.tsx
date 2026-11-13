@@ -34,7 +34,7 @@ function ActionButton({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[0.68rem] font-bold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="touch-target inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[0.68rem] font-bold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       {children}
     </button>
@@ -169,7 +169,7 @@ export function ChatBubble({
                       onClick={() => saveSuggestion(suggestion)}
                       disabled={saved}
                       className={cn(
-                        "inline-flex max-w-full items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors",
+                        "touch-target inline-flex max-w-full items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs transition-colors",
                         saved
                           ? "border-success/30 bg-success/10 text-success"
                           : "border-border bg-card hover:border-accent/40 hover:bg-accent-soft/50",

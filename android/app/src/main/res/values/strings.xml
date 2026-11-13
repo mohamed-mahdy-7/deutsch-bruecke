@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Deutsch Brücke</string>
+    <string name="title_activity_main">Deutsch Brücke</string>
+    <string name="package_name">app.bruecke.deutsch</string>
+    <string name="custom_url_scheme">app.bruecke.deutsch</string>
+</resources>

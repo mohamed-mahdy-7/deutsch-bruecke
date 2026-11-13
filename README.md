@@ -2,9 +2,9 @@
 
 **An Arabic-first AI German tutor built for Egyptian Arabic speakers learning A1–B1 German.**
 
-Deutsch Brücke combines short role-play conversations, gentle inline corrections, grammar drills driven by the learner's own mistakes, a sentence builder, and a spaced-repetition vocabulary trainer. The interface is Arabic and RTL by default, German is always isolated LTR, and every grammar explanation is written in warm Egyptian colloquial Arabic.
+Deutsch Brücke combines short role-play conversations, gentle inline corrections, grammar drills driven by the learner's own mistakes, a sentence builder, listening dictation, a pronunciation coach, a structured A1–B1 path, and a spaced-repetition vocabulary trainer. The interface is Arabic and RTL by default, German is always isolated LTR, and every grammar explanation is written in warm Egyptian colloquial Arabic.
 
-The app runs as a guest out of the box with local-first progress. Supabase is optional and adds cross-device accounts and sync.
+The app runs as a guest out of the box with local-first progress. Supabase is optional and adds cross-device accounts and sync. The same build can be wrapped with Capacitor for Android and iOS, using native text-to-speech and speech recognition when installed as an app.
 
 ---
 
@@ -27,6 +27,7 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 - [Deployment](#deployment)
 - [Capacitor packaging guide](#capacitor-packaging-guide)
 - [Phase 2](#phase-2)
+- [Phase 3](#phase-3)
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
 
@@ -41,8 +42,11 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 - **AI custom-conversation creator** — describe any everyday situation in Arabic, Egyptian dialect, German, or a mix. Choose an optional CEFR level, `du`/`Sie`, and a friendly or stricter tone. Every generated field is editable in the preview; regenerate, discard, or save and start chatting immediately. Saved scenarios carry an **AI-made** badge and can be edited, duplicated, or deleted. Guests keep them locally; signed-in learners sync them through Supabase.
 - **Gentle corrections** — every learner turn receives a corrected German sentence, at most 2–3 focused mistakes, a specific Arabic praise line, and a natural follow-up question. Arabic explanations focus on *why*, with Arabic–German contrasts where useful.
 - **Safe mode** — a per-session toggle that asks the tutor for shorter, slower, idiom-free German.
-- **Speech support** — German text can be spoken with the Web Speech API (`de-DE`), and supported browsers can dictate learner turns.
+- **Speech support** — German text can be spoken with the Web Speech API (`de-DE`) or native device voices inside the Capacitor app, and supported browsers/devices can dictate learner turns.
 - **Word help** — tap a German word for a local dictionary lookup first; when online, the AI can fill in article, plural, meaning, and an example.
+- **Structured A1–B1 curriculum** — nine units and 36 short lessons that sequence existing scenarios, grammar drills, vocabulary, sentence building, listening, and pronunciation. Lessons unlock in order and each completed lesson opens the next; units unlock when the previous unit is complete. Progress is saved locally and synced for signed-in learners.
+- **Listening dictation** — 24 short German sentences across A1, A2, and B1 with normal and slow playback, optional first-letter and translation hints, word-level diff highlighting, and a saved accuracy score.
+- **Pronunciation coach** — 18 everyday phrases focused on tricky German sounds (`ch`, `sch`, `ü`, `ö`, `ä`, `r`, `w`, `v`, `z`, `ei`, `ie`, `eu`, initial `sp/st`, final `-er`). Record with the microphone or type what you said, then review per-sound feedback and Arabic tips.
 - **AI grammar practice hub** — seven drill topics: articles, cases, prepositions, verb position, separable verbs, subordinate clauses, and plurals. Every session asks the API for ten level-aware questions shaped by the learner's recorded weak spots. Questions are validated before display, cached by normalized request, and explained in Egyptian Arabic. The saved article/case/preposition pools remain as an offline fallback.
 - **Sentence builder** — 16 token-ordering exercises covering verb-second, verb-final, separable verbs, questions, and general word order.
 - **SRS vocabulary** — 100 seeded A1 cards plus words added manually or captured from conversations. Reviews use an SM-2-inspired scheduler with Again / Hard / Good / Easy grades.
@@ -74,7 +78,10 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 | Backend | Node.js, Express 4, TypeScript, `tsx` in development |
 | AI | Anthropic Claude or Google Gemini, server-side only |
 | Auth and sync | Supabase Auth + Postgres with Row Level Security (optional) |
-| Testing | Vitest (unit tests for API JSON parsing, SRS, adaptive selection, German segmentation) |
+| Native | Capacitor 8 (`@capacitor-community/text-to-speech`, `@capacitor-community/speech-recognition`) |
+| Rate limiting | `express-rate-limit` with an optional shared Redis store and in-memory fallback |
+| Observability | JSON-lines logs, request IDs, in-process counters/timings, `/api/metrics` |
+| Testing | Vitest (unit and endpoint tests across API and web) |
 | Tooling | npm workspaces, concurrently |
 
 Requirements: **Node.js 20 or newer** and npm 10 or newer.
@@ -94,8 +101,8 @@ Requirements: **Node.js 20 or newer** and npm 10 or newer.
 │   │       ├── schemas.ts        # Zod request/response contracts
 │   │       ├── data/scenarios.ts # built-in allow-list + custom scenario mapper
 │   │       ├── data/drills.ts    # 70-question demo/fallback drill bank
-│   │       ├── lib/              # JSON extraction, errors, HTTP helpers, drill text normalisation
-│   │       ├── middleware/       # JSON-aware rate limiter
+│   │       ├── lib/              # JSON extraction, errors, HTTP helpers, logger, metrics, drill text normalisation
+│   │       ├── middleware/       # rate limiter, resilient Redis store, request observability
 │   │       ├── prompts/          # tutor, assist, word, scenario, and drill prompts
 │   │       ├── services/ai.ts    # Anthropic, Gemini, and demo gateways
 │   │       ├── services/drillCache.ts      # normalized cache + in-flight dedupe
@@ -108,19 +115,23 @@ Requirements: **Node.js 20 or newer** and npm 10 or newer.
 │       └── src
 │           ├── components/       # UI, layout, German, tutor, and drill components
 │           ├── config/           # browser-safe env
-│           ├── data/             # scenarios, vocab, drills, sentences, placement
-│           ├── hooks/            # speech, online, install
-│           ├── lib/              # SRS, adaptive, dates, German highlighting, i18n
-│           ├── pages/            # route screens
+│           ├── data/             # scenarios, vocab, drills, sentences, placement, curriculum, listening, pronunciation
+│           ├── hooks/            # speech (web + Capacitor), online, install
+│           ├── lib/              # SRS, adaptive, dates, German highlighting, i18n, curriculum, dictation, pronunciation
+│           ├── pages/            # route screens including curriculum, listening, and pronunciation
 │           ├── providers/        # settings/theme/language
 │           ├── services/         # AI client, drill mapping, local store, Supabase, dictionary
 │           ├── state/            # auth, progress, factories, merge, mutations
 │           ├── styles/           # Tailwind layers and design tokens
 │           └── types/            # canonical domain model
+├── android                       # generated Capacitor Android project
+├── ios                           # generated Capacitor iOS project
 ├── supabase
 │   └── migrations
 │       ├── 001_initial.sql
-│       └── 002_custom_scenarios.sql
+│       ├── 002_custom_scenarios.sql
+│       └── 003_curriculum.sql
+├── capacitor.config.ts           # native shell configuration
 ├── .env.example
 └── package.json                  # npm workspaces and root scripts
 ```
@@ -160,6 +171,7 @@ npm run dev
 - Web: <http://localhost:5173>
 - API: <http://localhost:8787>
 - Health: <http://localhost:8787/api/health>
+- Metrics: <http://localhost:8787/api/metrics>
 
 Vite proxies `/api` to the API server, so the browser only talks to one origin in development.
 
@@ -206,6 +218,9 @@ All values live in a single root `.env` file. The API loads it with `dotenv`; Vi
 | `DRILL_RATE_WINDOW_MINUTES` | `15` | API | AI drill-generation rate-limit window. |
 | `DRILL_RATE_MAX` | `20` | API | Drill sessions per IP per window. Each cache miss can call the provider once or twice. |
 | `TRUST_PROXY` | `0` | API | Set to `1` only behind a trusted reverse proxy so rate limits use the real client IP. |
+| `REDIS_URL` | empty | API | Optional Redis connection for shared rate-limit counters across API instances. |
+| `RATE_LIMIT_STORE` | auto | API | `redis` or `memory`. Defaults to `redis` when `REDIS_URL` is set, otherwise `memory`. |
+| `LOG_REQUESTS` | `true` | API | JSON request logs with request IDs. Set to `false` to silence per-request lines; metrics remain available. |
 
 Restart the dev server after changing `.env` or Vite values.
 
@@ -217,7 +232,7 @@ Restart the dev server after changing `.env` or Vite values.
 
 Select the AI backend with `AI_PROVIDER=anthropic | gemini | demo`. When it is unset, the API prefers Anthropic, then Gemini, then falls back to the demo tutor in development. `AI_DEMO_MODE=true` always wins, so local UI work never calls a paid API by accident.
 
-Both live gateways reuse the same system prompts, Zod schemas, history window, and one-shot JSON repair path. `/api/health` reports the active gateway:
+Both live gateways reuse the same system prompts, Zod schemas, history window, and one-shot JSON repair path. `/api/health` reports the active gateway plus runtime details:
 
 ```json
 {
@@ -226,10 +241,17 @@ Both live gateways reuse the same system prompts, Zod schemas, history window, a
     "status": "ok",
     "ai": "live",
     "provider": "gemini",
-    "timestamp": "2026-01-01T00:00:00.000Z"
+    "environment": "production",
+    "timestamp": "2026-01-01T00:00:00.000Z",
+    "uptimeSeconds": 3600,
+    "requestCount": 1420,
+    "rateLimitStore": "connected",
+    "cache": { "scenarioEntries": 12, "drillEntries": 34 }
   }
 }
 ```
+
+`rateLimitStore` is `disabled` when memory storage is used, `connected` when Redis is reachable, and `degraded` while the API is falling back to memory after a Redis failure.
 
 The API has three explicit modes:
 
@@ -252,13 +274,14 @@ The server never silently enables demo mode in production.
 - Every request body is validated with Zod and capped at 32 kB.
 - Responses are validated against Zod; Markdown fences are stripped and malformed output gets one repair attempt.
 - `helmet` sets security headers; CORS is an explicit allow-list.
-- JSON-aware rate limiters protect chat, assist, word, scenario-generation, and drill-generation routes per IP.
-- Errors are normalised into a stable envelope; internal errors are logged, not leaked.
+- JSON-aware rate limiters protect chat, assist, word, scenario-generation, and drill-generation routes per IP. They use the in-memory store by default and an optional shared Redis store when `REDIS_URL` is set.
+- Errors are normalised into a stable envelope with a request ID; internal errors are logged, not leaked.
+- Every response carries an `x-request-id`; `/api/metrics` exposes counters and timings for requests, AI calls, cache events, rate limits, and server errors.
 - The tutor prompt treats learner text and history as untrusted data and refuses prompt-extraction and off-topic requests.
 - Conversation history is limited to 12 items by the request schema and trimmed again before the Anthropic call.
 - The tutor is instructed to cap German at the learner's CEFR level and to keep corrections focused.
 
-> **Rate limits are in-memory.** They reset on restart and are per process. For multi-instance deployments, replace the limiter store with Redis or another shared store.
+> **Shared limits are optional.** Without `REDIS_URL`, rate limits are per process and reset on restart. Set `REDIS_URL` when running more than one API instance; if Redis becomes unreachable, the limiter opens a 15-second circuit breaker and falls back to its local memory store so requests keep working.
 
 ### AI response contract
 
@@ -366,7 +389,7 @@ Create a project at [supabase.com](https://supabase.com). Note the project URL a
 
 ### 2. Run the migration
 
-Open the Supabase **SQL Editor**, paste the contents of [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql), run it, then repeat with [`supabase/migrations/002_custom_scenarios.sql`](supabase/migrations/002_custom_scenarios.sql). Fresh projects run both in order; existing projects only need `002`.
+Open the Supabase **SQL Editor**, paste the contents of [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql), run it, then repeat with [`002_custom_scenarios.sql`](supabase/migrations/002_custom_scenarios.sql) and [`003_curriculum.sql`](supabase/migrations/003_curriculum.sql). Fresh projects run all three in order; existing projects only need the new migrations.
 
 The migrations create:
 
@@ -382,6 +405,7 @@ The migrations create:
 | `daily_activity` | XP and active seconds per local date |
 | `streaks` | Current/longest streak and last practice date |
 | `custom_scenarios` | Learner-generated scenarios stored as validated JSONB (`data`) plus timestamps |
+| `curriculum_completions` | Completed curriculum lesson ids and XP per learner |
 
 It also adds indexes, check constraints, foreign keys with cascade deletes, RLS policies scoped to `auth.uid()`, and revokes anonymous access.
 
@@ -418,7 +442,7 @@ Restart `npm run dev`. The auth page now offers email and Google sign-in. Withou
 - Guest custom scenarios are stored per owner under `deutsch-bruecke:custom-scenarios:v1:<ownerId>`.
 - Preferences live under `deutsch-bruecke:preferences:v1`.
 - Signing in with a guest state promotes that state into the account when no remote profile exists. Guest-created custom scenarios are promoted into `custom_scenarios` on first sign-in.
-- When both local and remote state exist for the same account, they are merged; the browser then debounces writes to Supabase by two seconds. Custom scenarios merge by `id`, keeping the newest `updatedAt`.
+- When both local and remote state exist for the same account, they are merged; the browser then debounces writes to Supabase by two seconds. Custom scenarios merge by `id`, keeping the newest `updatedAt`. Curriculum completions merge as a union of completed lesson ids.
 - Custom scenario edits, duplicates, and deletes update local storage first and then sync in the background; a failed sync keeps the local copy and shows a warning badge.
 - Active practice time is recorded in one-minute increments while the tab is visible.
 - Clearing site data while signed out removes guest progress permanently.
@@ -446,23 +470,27 @@ Error:
   "error": {
     "code": "invalid_request",
     "message": "Some of the submitted data is invalid.",
+    "requestId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
     "details": [{ "path": "learnerMessage", "message": "String must contain at most 500 character(s)" }]
   }
 }
 ```
 
-`/api/health` returns `{ "ok": true, "data": { ... } }` without `meta`.
+`/api/health` returns `{ "ok": true, "data": { ... } }` without `meta`. Every response includes an `x-request-id` header; a safe client-supplied `x-request-id` is reused.
 
 ### Endpoints
 
 | Method | Path | Purpose | Rate limit |
 | --- | --- | --- | --- |
-| `GET` | `/api/health` | Status, AI mode and active provider, timestamp | None |
+| `GET` | `/api/health` | Status, AI mode, provider, uptime, request count, cache sizes, Redis status | None |
+| `GET` | `/api/metrics` | JSON counters and timings for requests, AI calls, cache events, rate limits, and errors | None |
 | `POST` | `/api/chat` | One tutor turn with correction and vocabulary | `CHAT_RATE_*` |
 | `POST` | `/api/scenarios/generate` | Turn one learner idea into a validated, editable scenario | `SCENARIO_RATE_*` |
 | `POST` | `/api/drills/generate` | Generate a ten-question, level-aware grammar drill session | `DRILL_RATE_*` |
 | `POST` | `/api/assist` | Explain, simplify, or translate a German snippet | `ASSIST_RATE_*` |
 | `POST` | `/api/word` | Dictionary details for a single word | `WORD_RATE_*` |
+
+Metrics are in-process and reset when the API restarts. `GET /api/metrics` returns `counters`, `timings`, `startedAt`, `uptimeSeconds`, Redis status, and current cache sizes; scrape it from your host, or forward the JSON request logs to your log platform.
 
 ### `POST /api/chat`
 
@@ -557,16 +585,18 @@ Returns the word's article, plural, part of speech, Arabic and English meanings,
 
 - **`SettingsProvider`** owns UI language, theme, and instant application to `<html>`/`<body>`. Preferences are mirrored into the authenticated profile but local choices always win.
 - **`AuthProvider`** wraps Supabase session handling and exposes email, Google, and sign-out actions. It remains fully functional without Supabase by reporting guest/anonymous mode.
-- **`ProgressProvider`** is the single source of truth for learning data. It hydrates guest or account progress, exposes typed mutations, debounces remote saves, tracks active minutes, records chat mistakes as weak spots, and merges local/remote state on sign-in.
+- **`ProgressProvider`** is the single source of truth for learning data. It hydrates guest or account progress, exposes typed mutations, debounces remote saves, tracks active minutes, records chat mistakes as weak spots, stores curriculum completions, and merges local/remote state on sign-in.
 - **`CustomScenariosProvider`** owns learner-generated scenarios. It merges per-owner local storage, promoted guest scenarios, and Supabase rows by `updatedAt`, then exposes save, delete, duplicate, and lookup helpers. Scenario generation itself happens in `CustomScenarioPage`.
+- **Speech hooks** in `hooks/useSpeech.ts` expose one API for the browser and the native shell: Capacitor text-to-speech/speech-recognition on Android and iOS, with the Web Speech API as the web fallback. Microphone and speech usage descriptions are declared in the native projects.
 - **Services** isolate side effects: `ai.ts` (typed Zod client), `customScenarioStore.ts` (validated local persistence and merging), `remoteCustomScenarios.ts` (Supabase sync), `customScenarioMapping.ts` (API/domain/chat mapping), `supabaseClient.ts`, `remoteProgress.ts`, `localStore.ts`, `dictionary.ts`, and `wordLookup.ts`.
 - **Domain types** in `types/domain.ts` are shared by seed data, state, services, and UI.
 - **Route gates** distinguish anonymous, guest, and authenticated users; guests can still open `/auth` to promote progress, while authenticated users are redirected away from it.
 
 ### API
 
-- `config.ts` resolves the shared root `.env`, validates numeric settings, and decides the AI mode.
-- `app.ts` composes Express middleware, rate limiters, Zod validation, scenario lookup, custom scenario resolution, and response envelopes.
+- `config.ts` resolves the shared root `.env`, validates numeric settings, and decides the AI mode, Redis store, and logging flags.
+- `app.ts` composes Express middleware, rate limiters, Zod validation, scenario lookup, custom scenario resolution, observability, and response envelopes.
+- `middleware/observability.ts` attaches request IDs, records request counters/timings, and writes one structured JSON log line per request when `LOG_REQUESTS` allows it. `lib/metrics.ts` is a small in-process registry; `lib/logger.ts` writes JSON lines. `middleware/rateLimitStore.ts` adds the optional Redis store with an atomic increment script, a shared connection, a 15-second circuit breaker, and automatic memory fallback.
 - `prompts/` contains the tutor, assist, word, and scenario prompts. The tutor prompt enforces the CEFR cap, correction contract, Egyptian Arabic voice, safety boundaries, formality, tone, grammar focus, key vocabulary, and JSON output. The scenario prompt isolates learner ideas as untrusted data and defines refusal rules.
 - `services/ai.ts` defines an `AiGateway` interface with live and demo implementations. The live gateway retries once with a repair instruction when structured JSON is invalid. The demo gateway returns deterministic scenarios for the full creator flow.
 - `services/scenarioCache.ts` normalizes ideas (case, punctuation, spacing, Arabic diacritics), caches completed scenarios for 30 minutes, and de-duplicates concurrent identical requests.
@@ -615,6 +645,9 @@ CustomScenariosProvider ── local storage ──► Supabase custom_scenarios
 | · Case questions | 18 |
 | · Preposition questions | 10 |
 | AI/demo drill bank | 70 (10 per practice topic) |
+| Curriculum | 9 units · 36 lessons (12 per CEFR level) |
+| Listening dictation clips | 24 (8 per CEFR level) |
+| Pronunciation phrases | 18 (6 per CEFR level) |
 | Sentence-building exercises | 16 |
 | Placement questions | 5 |
 | Local dictionary entries | 100 |
@@ -634,6 +667,10 @@ Run from the repository root:
 | `npm run preview` | Run the built API and Vite preview with `/api` proxying |
 | `npm run typecheck` | Typecheck every workspace |
 | `npm test` | Run all Vitest suites |
+| `npm run native:build` | Build the web app for the native shell |
+| `npm run cap:sync` | Build the web app, copy assets, and sync native plugins |
+| `npm run cap:android` | Sync and open the Android project in Android Studio |
+| `npm run cap:ios` | Sync and open the iOS project in Xcode (macOS only) |
 
 Workspace-specific examples:
 
@@ -648,12 +685,17 @@ npm test --workspace @bruecke/web
 
 ## Testing and verification
 
-The repository currently includes 136 unit tests (89 API + 47 web):
+The repository currently includes 195 unit and endpoint tests (111 API + 84 web):
 
 - API JSON extraction and structured-response parsing.
 - API request/model schemas, including drill topics, weak-spot caps, option counts, custom scenario limits, formality/article validation, and refusal shapes.
 - Endpoint tests for scenario generation: validation, tone attachment, explicit level/formality override, cache hits, forced regeneration, refusal mapping, and custom-chat resolution.
 - Endpoint tests for drill generation: all seven topics, ten unique validated questions, normalized cache hits, forced regeneration, invalid-item replacement and bank fill, provider failure mapping, and unknown-topic rejection.
+- Observability tests: request IDs (generated, reused, unsafe values replaced), `/api/health`, `/api/metrics`, request counters/timings, AI and cache counters, and 429 `Retry-After` handling.
+- Rate-limit store tests with a fake Redis client: atomic increments, reset/decrement, shared connection, memory fallback on connection or command failure, and the circuit breaker.
+- Curriculum data and progression: 9 units, 36 lessons, level counts, unique ids, ordered unlocking, completion merging, next-lesson selection, and per-unit/per-level progress.
+- Listening dictation: word alignment, punctuation/case handling, insertion/deletion/substitution diffing, pass thresholds, and the 24-clip bank.
+- Pronunciation: grapheme-to-phoneme approximations for every target sound, phrase bank coverage, word accuracy, and per-sound status thresholds.
 - Drill sanity validation: duplicate options, missing answer match, duplicate stems across batches, empty stems, English fallback, camelCase mapping.
 - Drill cache normalization: weak-spot order/case/spacing, count merging and caps, stable empty key, TTL expiry, refresh, and concurrent de-duplication.
 - Scenario cache normalization, TTL expiry, concurrent de-duplication, and refresh semantics.
@@ -685,6 +727,10 @@ For a manual smoke test:
 12. Toggle Arabic/English and light/dark mode.
 13. Install the PWA and reload while offline to verify the shell and local content.
 14. Sign in with Supabase configured and confirm sync, guest-progress promotion, and custom scenario sync.
+15. Open **Path**, complete the first lesson, and confirm the next lesson and unit unlock state update immediately. Reload to confirm the completion persisted.
+16. Open **Listening**, play a sentence normally and slowly, submit a deliberately imperfect transcript, review the coloured word diff, and confirm the score is recorded.
+17. Open **Speaking**, record a phrase or use the typed fallback, and confirm the per-sound scores and Arabic tips appear.
+18. Visit `http://localhost:8787/api/health` and `/api/metrics`; confirm request IDs appear in response headers and counters increase after using the app.
 
 ---
 
@@ -694,7 +740,8 @@ For a manual smoke test:
 - The service worker precaches the app shell, fonts, CSS, JS chunks, and icons.
 - The generated manifest declares Arabic/RTL, standalone display, portrait orientation, theme colours, and two shortcuts (`/tutor`, `/vocabulary`).
 - Icons are generated reproducibly with `apps/web/scripts/generate-icons.ps1` (192 px, 512 px, maskable 512 px, Apple touch icon).
-- Core learning content, drills, vocabulary, and local progress remain available offline.
+- Core learning content, curriculum, listening dictation, pronunciation phrases, drills, vocabulary, and local progress remain available offline.
+- Listening playback depends on installed German voices; pronunciation recording uses the browser/OS speech engine and may be limited offline.
 - AI chat, AI word lookup, and Supabase sync require connectivity.
 - Installing requires HTTPS (or localhost during development).
 
@@ -735,6 +782,8 @@ Set production values in the root `.env` or the host's environment:
 - `CLIENT_ORIGIN=https://your-web-origin`
 - `PORT` as required by the host
 - `TRUST_PROXY=1` when behind a trusted proxy
+- `REDIS_URL` (optional) for shared rate-limit counters
+- `LOG_REQUESTS=false` only if the host already captures request metadata another way
 
 ### Serve the web app
 
@@ -754,7 +803,9 @@ Vite environment variables are baked in at build time. Rebuild the web app whene
 - [ ] HTTPS is enabled.
 - [ ] Supabase migration applied and redirect URLs configured.
 - [ ] `TRUST_PROXY=1` only if a trusted proxy terminates connections.
-- [ ] Rate-limit storage is shared if you run multiple API instances.
+- [ ] `REDIS_URL` is set and reachable if you run multiple API instances.
+- [ ] `/api/health` reports `rateLimitStore: "connected"` (or `disabled` for a single instance).
+- [ ] Request logs and `/api/metrics` are wired into the host's logging/monitoring.
 - [ ] SPA fallback and `/api` proxy are configured.
 - [ ] The service worker and manifest load without console errors.
 
@@ -762,25 +813,36 @@ Vite environment variables are baked in at build time. Rebuild the web app whene
 
 ## Capacitor packaging guide
 
-The app is currently a PWA. The architecture is ready for a Capacitor wrapper in a later phase:
+The repository now includes generated Android and iOS projects plus shared native speech plugins. The web build remains the source of truth; Capacitor copies it into `android/app/src/main/assets/public` and `ios/App/App/public`.
+
+### What is configured
+
+- `capacitor.config.ts` sets the app id `app.bruecke.deutsch`, the name **Deutsch Brücke**, and `webDir: apps/web/dist`.
+- `@capacitor-community/text-to-speech` provides German device voices.
+- `@capacitor-community/speech-recognition` provides microphone dictation for pronunciation practice.
+- Android declares `INTERNET` and `RECORD_AUDIO` in `android/app/src/main/AndroidManifest.xml`.
+- iOS declares `NSMicrophoneUsageDescription` and `NSSpeechRecognitionUsageDescription` in `ios/App/App/Info.plist`.
+
+### Build and sync
 
 ```bash
-npm install @capacitor/core @capacitor/cli @capacitor/android
-npx cap init "Deutsch Brücke" "app.bruecke.deutsch" --web-dir "apps/web/dist"
-npx cap add android
-npm run build
-npx cap sync
-npx cap open android
+# Rebuild the web app and copy it plus plugins into both native projects
+npm run cap:sync
+
+# Open the native IDE
+npm run cap:android
+npm run cap:ios
 ```
 
-For iOS, install `@capacitor/ios` and add the iOS platform similarly. Capacitor requires macOS and Xcode for iOS builds.
+Inside Android Studio, build/run the `app` module on a device or emulator. In Xcode, select the `App` scheme and a simulator/device. The iOS build requires macOS and Xcode; Android requires the Android SDK and Java 21.
 
 ### Native considerations
 
 - **API base URL** — a WebView cannot use the Vite dev proxy. Build with an absolute `VITE_API_BASE_URL=https://api.example.com/api`.
 - **Allowed origins** — add `https://localhost` (Android) and `capacitor://localhost` (iOS) to the API's `CLIENT_ORIGIN` if the WebView calls the API directly.
-- **Secrets** — never ship the Anthropic key in the app. All AI calls stay behind your API.
-- **Speech** — Android WebView supports speech synthesis; speech recognition support varies by WebView/OS. A native speech plugin is the reliable path if dictation becomes a core native feature.
+- **Secrets** — never ship the Anthropic or Gemini key in the app. All AI calls stay behind your API.
+- **Speech** — the app prefers native TTS and recognition when `Capacitor.isNativePlatform()` is true and falls back to the Web Speech API in a browser.
+- **Permissions** — the first recording or dictation request prompts for microphone/speech access. If a user denies it, the pronunciation page offers the typed fallback.
 - **Service worker** — native WebViews do not use the PWA service worker; bundled assets are already local. Keep the PWA target for browser installs.
 - **Safe areas** — respect notches and gesture bars with `env(safe-area-inset-*)` in the shell.
 - **Cleartext HTTP** — use HTTPS APIs in production; only allow cleartext in local Android debug builds.
@@ -800,15 +862,19 @@ Implemented in Phase 2:
 - Arabic RTL layout, English toggle, German LTR isolation, and der/die/das colour coding are preserved in the new session UI, including loading skeletons, empty states, rate-limit/offline errors, and retry actions.
 - API and frontend coverage was expanded for schemas, sanity checks, cache behaviour, endpoint orchestration, mapping, and static banks.
 
-Planned for Phase 3:
+## Phase 3 — Path, listening, pronunciation, native shell, and observability
 
-- A pronunciation coach with phoneme-level feedback.
-- Listening dictation exercises.
-- A structured A1–B1 curriculum that sequences scenarios, grammar, and vocabulary into a guided path.
-- Native packaging and native speech plugins via Capacitor.
-- Shared rate-limit storage and richer observability for multi-instance deployments.
+Implemented in Phase 3:
 
-The current domain model, skill-tracking tables, and deep-linkable trainers are structured so these can be added without rewriting the learning state.
+- **Structured A1–B1 path** — 9 units and 36 lessons sequence built-in scenarios, grammar drills, vocabulary, sentence building, listening, and pronunciation. Lessons unlock sequentially, units unlock after the previous unit, and the first unit is always open. A dedicated `curriculum_completions` table stores completions for signed-in learners; guest completions stay in local storage. Missing-table reads and saves degrade gracefully, so the app still works before the migration is applied.
+- **Listening dictation** — a 24-clip bank across A1/A2/B1 with normal and slow TTS playback, first-letter and translation hints, shared word alignment, a word-level diff, and pass/fail scoring. Results feed analytics without creating grammar weak spots.
+- **Pronunciation coach** — 18 phrases targeting difficult German sounds. The scorer approximates phonemes from grapheme rules and reports per-sound clarity, word accuracy, and Arabic tips. Native speech recognition is used inside Capacitor; the browser and typed fallback remain available.
+- **Native packaging** — Capacitor 8 Android and iOS projects, native text-to-speech and speech recognition, and microphone/speech usage descriptions. Root scripts cover building, syncing, and opening each native project.
+- **Shared rate limiting** — an optional Redis store with an atomic increment script, a shared client, a 15-second circuit breaker, and automatic per-process memory fallback. `REDIS_URL` and `RATE_LIMIT_STORE` control it.
+- **Observability** — request IDs on every response, structured JSON request logs, enriched `/api/health`, and a JSON `/api/metrics` endpoint with request, timing, AI, cache, rate-limit, and server-error counters.
+- Arabic RTL, the English toggle, German LTR isolation, and der/die/das colour coding are preserved across every new screen.
+
+Automated coverage was expanded for curriculum progression, word alignment and dictation scoring, pronunciation scoring, metrics, request IDs, rate limiting, and Redis fallback. Native runtime builds still require Android Studio/Xcode and a device or emulator.
 
 ---
 
@@ -827,7 +893,11 @@ The current domain model, skill-tracking tables, and deep-linkable trainers are 
 | Drill generation shows the Arabic retry message | Check `http://localhost:8787/api/health` and the provider key/quota. If the failure persists, articles, cases, and prepositions can still run from the saved bank. |
 | OAuth returns to the wrong place | Add `<web-origin>/auth` to Supabase redirect URLs and set the Site URL correctly. |
 | PWA does not offer installation | Use HTTPS or localhost, confirm the manifest and service worker load, and clear old service workers during development. |
-| Speech recognition does nothing | Use a browser/OS with Web Speech recognition (often Chrome/Edge/Android). Typing and speech playback remain available. |
+| Speech recognition does nothing | Use a browser/OS with Web Speech recognition (often Chrome/Edge/Android) or run the Capacitor app. The pronunciation page offers a typed fallback. |
+| Microphone permission denied in the native app | Re-enable microphone/speech permissions in the OS settings. Android declares `RECORD_AUDIO`; iOS declares microphone and speech recognition usage strings. |
+| Redis is configured but health says `degraded` | Check `REDIS_URL`, network access, and the Redis server. The limiter keeps serving requests from the in-memory fallback and retries after 15 seconds. |
+| `/api/metrics` is empty after a restart | Metrics are in-process and intentionally reset with the process. Scrape after warm-up or forward the JSON request logs. |
+| Native app shows a blank screen | Run `npm run cap:sync`, confirm `apps/web/dist` exists, and check that the WebView can reach the absolute `VITE_API_BASE_URL`. |
 | `preview` shows API 404s | Run `npm run build`, then `npm run preview`; both apps must be running. The preview config proxies `/api` to port 8787. |
 | Port already in use | Stop the conflicting process or change `PORT` and the Vite proxy target together. |
 

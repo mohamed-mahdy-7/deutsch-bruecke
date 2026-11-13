@@ -81,6 +81,14 @@ export interface DrillAnswerInput {
   labelEn: string;
   xpCorrect?: number;
   xpIncorrect?: number;
+  /** Listening and pronunciation results are analytics-only by default. */
+  trackWeakSpot?: boolean;
+}
+
+export interface CompleteCurriculumLessonInput {
+  lessonId: string;
+  xp?: number;
+  score?: number;
 }
 
 export interface CompleteTutorTurnInput {
@@ -107,6 +115,7 @@ interface ProgressContextValue {
   updateProfile: (patch: Partial<Profile>) => void;
   completeOnboarding: (data: OnboardingData) => void;
   recordDrillAnswer: (input: DrillAnswerInput) => void;
+  completeCurriculumLesson: (input: CompleteCurriculumLessonInput) => void;
   addVocabCard: (input: NewVocabInput) => boolean;
   reviewVocabCard: (cardId: string, quality: SrsQuality) => void;
   ensureConversation: (scenario: Scenario) => Conversation | null;
@@ -445,7 +454,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         ],
       };
 
-      if (!input.correct) {
+      if (!input.correct && input.trackWeakSpot !== false) {
         next = addWeakSpotToState(
           next,
           {
@@ -463,6 +472,42 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
       return next;
     });
   }, []);
+
+  const completeCurriculumLesson = useCallback(
+    (input: CompleteCurriculumLessonInput) => {
+      setProgress((current) => {
+        if (!current) return current;
+        if (
+          current.curriculumCompletions.some(
+            (completion) => completion.lessonId === input.lessonId,
+          )
+        ) {
+          return current;
+        }
+
+        const now = new Date();
+        let next: ProgressState = {
+          ...current,
+          curriculumCompletions: [
+            ...current.curriculumCompletions,
+            {
+              lessonId: input.lessonId,
+              completedAt: now.toISOString(),
+              ...(typeof input.score === "number" ? { score: input.score } : {}),
+            },
+          ],
+        };
+        next = addPracticeActivity(
+          next,
+          { xp: input.xp ?? 25, seconds: 0 },
+          now,
+        );
+        progressRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
 
   const addVocabCard = useCallback((input: NewVocabInput): boolean => {
     const current = progressRef.current;
@@ -740,6 +785,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
       updateProfile,
       completeOnboarding,
       recordDrillAnswer,
+      completeCurriculumLesson,
       addVocabCard,
       reviewVocabCard,
       ensureConversation,
@@ -756,6 +802,7 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
       updateProfile,
       completeOnboarding,
       recordDrillAnswer,
+      completeCurriculumLesson,
       addVocabCard,
       reviewVocabCard,
       ensureConversation,

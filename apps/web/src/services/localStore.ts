@@ -32,7 +32,18 @@ export function readLocalProgress(): ProgressState | null {
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = safeJsonParse<StoredEnvelope>(raw);
     if (!parsed || parsed.version !== 1) return null;
-    return isUsableProgress(parsed.state) ? parsed.state : null;
+    if (!isUsableProgress(parsed.state)) return null;
+    // Progress saved before Phase 3 has no curriculum field. Default it so the
+    // rest of the app can rely on the array always being present.
+    const completions = Array.isArray(parsed.state.curriculumCompletions)
+      ? parsed.state.curriculumCompletions.filter(
+          (completion) =>
+            completion &&
+            typeof completion.lessonId === "string" &&
+            typeof completion.completedAt === "string",
+        )
+      : [];
+    return { ...parsed.state, curriculumCompletions: completions };
   } catch {
     return null;
   }
