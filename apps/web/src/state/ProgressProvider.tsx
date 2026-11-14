@@ -754,6 +754,16 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     }
   }, [authMode, user]);
 
+  // When the browser comes back online, try to flush pending edits.
+  useEffect(() => {
+    if (authMode !== "authenticated") return;
+    const handleOnline = () => {
+      void retrySync();
+    };
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [authMode, retrySync]);
+
   const resetProgress = useCallback(async () => {
     const current = progressRef.current;
     if (!current) return;
