@@ -26,12 +26,20 @@ export function PwaManager() {
       },
       onRegisteredSW(_swUrl, registration) {
         if (!registration) return;
-        updateCheck = setInterval(
-          () => {
-            void registration.update();
-          },
-          60 * 60 * 1000,
-        );
+        const check = () => void registration.update();
+        updateCheck = setInterval(check, 15 * 60 * 1000);
+        const onVisible = () => {
+          if (document.visibilityState === "visible") check();
+        };
+        const onOnline = () => check();
+        document.addEventListener("visibilitychange", onVisible);
+        window.addEventListener("online", onOnline);
+        // initial check on load
+        check();
+        return () => {
+          document.removeEventListener("visibilitychange", onVisible);
+          window.removeEventListener("online", onOnline);
+        };
       },
       onRegisterError(error) {
         console.warn("[pwa] Service worker registration failed:", error);

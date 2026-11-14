@@ -673,7 +673,7 @@ export function ProfilePage() {
             </p>
           </div>
           <p className="border-t border-border/60 pt-2.5 text-[0.62rem] text-muted-foreground">
-            {t("profile.version")}
+            {t("profile.version")} · {__APP_VERSION__}
           </p>
         </section>
       </div>
