@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
 import type { AiAction } from "@/types/domain";
 import { useAppPreferences } from "@/state/useAppPreferences";
+import { useAiAccess } from "@/state/AiAccessProvider";
 import { useProgress } from "@/state/ProgressProvider";
+import {
+  aiBlockKindForError,
+  AiAccessNotice,
+  type AiBlockKind,
+} from "@/components/ai/AiGate";
 import {
   requestExplanation,
   requestSimplification,
@@ -36,9 +42,13 @@ export function AiPanel({
 }) {
   const { t } = useAppPreferences();
   const { progress } = useProgress();
+  const aiAccess = useAiAccess();
+  const aiAccessRef = useRef(aiAccess);
+  aiAccessRef.current = aiAccess;
   const [result, setResult] = useState<PanelResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [block, setBlock] = useState<AiBlockKind | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   const open = Boolean(target);
@@ -50,6 +60,19 @@ export function AiPanel({
   useEffect(() => {
     if (!open || !text) return;
     let cancelled = false;
+
+    const access = aiAccessRef.current;
+    if (!access.canUse("assist")) {
+      setBlock(
+        access.status === "ready" ? "quota_exhausted" : access.status,
+      );
+      setLoading(false);
+      setError(false);
+      setResult(null);
+      return;
+    }
+
+    setBlock(null);
     setLoading(true);
     setError(false);
     setResult(null);
@@ -82,8 +105,17 @@ export function AiPanel({
       .then((next) => {
         if (!cancelled) setResult(next);
       })
-      .catch(() => {
-        if (!cancelled) setError(true);
+      .catch((caught) => {
+        if (cancelled) return;
+        const nextBlock = aiBlockKindForError(caught);
+        if (nextBlock) {
+          setBlock(nextBlock);
+          if (nextBlock === "quota_exhausted") {
+            void aiAccessRef.current.refresh();
+          }
+          return;
+        }
+        setError(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -93,6 +125,18 @@ export function AiPanel({
       cancelled = true;
     };
   }, [open, action, text, level, dialect, reloadKey]);
+
+  // After the learner signs in or redeems an invite from the panel, retry the
+  // explanation they asked for instead of leaving them on the gate.
+  useEffect(() => {
+    if (
+      aiAccess.status === "ready" &&
+      (block === "beta_required" || block === "signed_out")
+    ) {
+      setBlock(null);
+      setReloadKey((key) => key + 1);
+    }
+  }, [aiAccess.status, block]);
 
   return (
     <Modal
@@ -122,6 +166,8 @@ export function AiPanel({
           <Spinner />
           {t("tutor.aiPanel.loading")}
         </div>
+      ) : block ? (
+        <AiAccessNotice kind={block} feature="assist" />
       ) : error ? (
         <div className="space-y-3">
           <Alert tone="danger">{t("tutor.aiPanel.error")}</Alert>

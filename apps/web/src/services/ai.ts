@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { env } from "@/config/env";
+import { supabase } from "@/services/supabaseClient";
 import type { CefrLevel, DrillTopic, NativeDialect } from "@/types/domain";
 
 /* ------------------------------------------------------------------ */
@@ -159,7 +160,22 @@ const errorEnvelopeSchema = z.object({
   error: z.object({
     code: z.string(),
     message: z.string(),
+    details: z.record(z.string(), z.unknown()).optional(),
   }),
+});
+
+const quotaSchema = z.object({
+  limit: z.number(),
+  used: z.number(),
+  remaining: z.number(),
+});
+
+const entitlementResponseSchema = z.object({
+  aiEnabled: z.boolean(),
+  betaGate: z.boolean(),
+  approved: z.boolean(),
+  quotas: z.record(z.string(), quotaSchema),
+  resetAt: z.string(),
 });
 
 export type AiMode = "live" | "demo" | "unavailable";
@@ -171,6 +187,28 @@ export type WordAiResponse = z.infer<typeof wordResponseSchema>;
 export type GeneratedScenario = z.infer<typeof generatedScenarioSchema>;
 export type DrillAiQuestion = z.infer<typeof generatedDrillQuestionSchema>;
 export type DrillAiResponse = z.infer<typeof drillResponseSchema>;
+
+export type AiFeature =
+  | "chat"
+  | "scenario"
+  | "drill"
+  | "word"
+  | "assist"
+  | "recap";
+
+export interface AiQuota {
+  limit: number;
+  used: number;
+  remaining: number;
+}
+
+export interface AiEntitlement {
+  aiEnabled: boolean;
+  betaGate: boolean;
+  approved: boolean;
+  quotas: Partial<Record<AiFeature, AiQuota>>;
+  resetAt: string;
+}
 
 export interface ScenarioGenerationInput {
   idea: string;
@@ -195,12 +233,19 @@ export interface DrillGenerationInput {
 export class AiRequestError extends Error {
   readonly code: string;
   readonly status: number;
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: string, message: string, status = 0) {
+  constructor(
+    code: string,
+    message: string,
+    status = 0,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "AiRequestError";
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -222,6 +267,31 @@ const successEnvelopeSchema = <T extends z.ZodTypeAny>(dataSchema: T) =>
       .optional(),
   }) as z.ZodType<SuccessEnvelope<z.infer<T>>>;
 
+async function authHeaders(hasBody: boolean): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (hasBody) headers["Content-Type"] = "application/json";
+
+  const token = supabase
+    ? (await supabase.auth.getSession()).data.session?.access_token
+    : undefined;
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }
+
+  // Local-only escape hatch: the API is running with AUTH_BYPASS_DEV=true and
+  // there is no Supabase project, so there is no token to send.
+  if (env.aiDevBypass) return headers;
+
+  throw new AiRequestError("auth_required", "Sign in to use the AI tutor.", 401);
+}
+
+function notifyUsageChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event("ai-usage-changed"));
+}
+
 async function request<T>(
   path: string,
   dataSchema: z.ZodType<T>,
@@ -229,6 +299,10 @@ async function request<T>(
     method?: "GET" | "POST";
     body?: unknown;
     timeoutMs?: number;
+    /** Health is public; every AI endpoint requires a Supabase token. */
+    auth?: boolean;
+    /** Refresh the quota meter after a successful call. */
+    notifyUsage?: boolean;
   } = {},
 ): Promise<{ data: T; mode: AiMode | "unknown"; cached: boolean }> {
   const controller = new AbortController();
@@ -238,9 +312,16 @@ async function request<T>(
   );
 
   try {
+    const headers =
+      options.auth === false
+        ? options.body
+          ? { "Content-Type": "application/json" }
+          : undefined
+        : await authHeaders(Boolean(options.body));
+
     const response = await fetch(`${env.apiBaseUrl}${path}`, {
       method: options.method ?? "POST",
-      headers: options.body ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
       credentials: "same-origin",
@@ -256,6 +337,7 @@ async function request<T>(
           ? parsedError.data.error.message
           : "The tutor service refused the request.",
         response.status,
+        parsedError.success ? parsedError.data.error.details : undefined,
       );
     }
 
@@ -267,6 +349,8 @@ async function request<T>(
         502,
       );
     }
+
+    if (options.notifyUsage !== false) notifyUsageChanged();
 
     return {
       data: envelope.data.data,
@@ -373,6 +457,8 @@ export async function fetchAiHealth(): Promise<{
     const { data } = await request("/health", healthResponseSchema, {
       method: "GET",
       timeoutMs: 8_000,
+      auth: false,
+      notifyUsage: false,
     });
     return { reachable: true, mode: data.ai };
   } catch {
@@ -389,4 +475,79 @@ export function isNetworkError(error: unknown): boolean {
     error instanceof AiRequestError &&
     (error.code === "network" || error.code === "timeout")
   );
+}
+
+export function isAuthError(error: unknown): boolean {
+  return (
+    error instanceof AiRequestError &&
+    (error.code === "auth_required" || error.code === "invalid_token")
+  );
+}
+
+export function isBetaGateError(error: unknown): boolean {
+  return error instanceof AiRequestError && error.code === "beta_not_approved";
+}
+
+export function isQuotaExhaustedError(error: unknown): boolean {
+  return error instanceof AiRequestError && error.code === "quota_exhausted";
+}
+
+/** Service-level states that should render a calm "try again later" message. */
+export function isAiUnavailableError(error: unknown): boolean {
+  return (
+    error instanceof AiRequestError &&
+    [
+      "ai_disabled",
+      "ai_global_cap",
+      "ai_access_unavailable",
+      "auth_unavailable",
+      "ai_upstream_unavailable",
+      "ai_upstream_error",
+      "ai_provider_quota",
+      "ai_provider_auth",
+      "ai_timeout",
+    ].includes(error.code)
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase 2: entitlement + invite code                                  */
+/* ------------------------------------------------------------------ */
+
+export async function fetchAiEntitlement(): Promise<AiEntitlement> {
+  const { data } = await request("/ai/entitlement", entitlementResponseSchema, {
+    method: "GET",
+    timeoutMs: 10_000,
+    notifyUsage: false,
+  });
+
+  const quotas: Partial<Record<AiFeature, AiQuota>> = {};
+  for (const [feature, quota] of Object.entries(data.quotas)) {
+    quotas[feature as AiFeature] = quota;
+  }
+
+  return {
+    aiEnabled: data.aiEnabled,
+    betaGate: data.betaGate,
+    approved: data.approved,
+    quotas,
+    resetAt: data.resetAt,
+  };
+}
+
+export async function redeemInviteCode(
+  code: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (!supabase) throw new AiRequestError("auth_required", "Sign in first.", 401);
+  const { data, error } = await supabase.rpc("redeem_invite", {
+    p_code: code.trim(),
+  });
+  if (error) {
+    throw new AiRequestError("invite_redeem_failed", error.message);
+  }
+  const payload = data as { ok?: unknown; reason?: unknown } | null;
+  return {
+    ok: payload?.ok === true,
+    ...(typeof payload?.reason === "string" ? { reason: payload.reason } : {}),
+  };
 }

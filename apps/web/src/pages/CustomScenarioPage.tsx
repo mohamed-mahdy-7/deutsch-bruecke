@@ -16,6 +16,7 @@ import type {
   ScenarioTone,
 } from "@/types/domain";
 import { useAppPreferences } from "@/state/useAppPreferences";
+import { useAiAccess } from "@/state/AiAccessProvider";
 import { useCustomScenarios } from "@/state/CustomScenariosProvider";
 import {
   AiRequestError,
@@ -34,6 +35,11 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Feedback";
 import { GermanText } from "@/components/german/GermanText";
+import {
+  AiAccessNotice,
+  aiBlockKindForError,
+  type AiBlockKind,
+} from "@/components/ai/AiGate";
 
 type GenerationError =
   | { kind: "refused"; message: string }
@@ -105,6 +111,7 @@ export function CustomScenarioPage() {
   const { scenarioId } = useParams();
   const navigate = useNavigate();
   const { t } = useAppPreferences();
+  const aiAccess = useAiAccess();
   const { loading, getScenario, saveScenario } = useCustomScenarios();
 
   const [idea, setIdea] = useState("");
@@ -116,6 +123,7 @@ export function CustomScenarioPage() {
   const [saving, setSaving] = useState(false);
   const [edited, setEdited] = useState(false);
   const [error, setError] = useState<GenerationError | null>(null);
+  const [accessBlock, setAccessBlock] = useState<AiBlockKind | null>(null);
   const [loadedExisting, setLoadedExisting] = useState(false);
   const ideaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -124,6 +132,7 @@ export function CustomScenarioPage() {
     setDraft(null);
     setIdea("");
     setError(null);
+    setAccessBlock(null);
     setEdited(false);
     setLevel("auto");
     setFormality("auto");
@@ -147,7 +156,29 @@ export function CustomScenarioPage() {
     setEdited(true);
   };
 
+  const currentBlock: AiBlockKind | null =
+    aiAccess.status === "ready"
+      ? aiAccess.remaining("scenario") === 0
+        ? "quota_exhausted"
+        : null
+      : aiAccess.status;
+
+  useEffect(() => {
+    if (
+      aiAccess.status === "ready" &&
+      (accessBlock === "beta_required" || accessBlock === "signed_out")
+    ) {
+      setAccessBlock(null);
+      setError(null);
+    }
+  }, [aiAccess.status, accessBlock]);
+
   const generate = async (forceRegenerate: boolean) => {
+    if (!aiAccess.canUse("scenario")) {
+      setAccessBlock(currentBlock);
+      return;
+    }
+
     const trimmed = idea.trim();
     if (trimmed.length < 3 && !draft) {
       setError({ kind: "invalid", message: t("tutor.invalidIdea") });
@@ -165,6 +196,7 @@ export function CustomScenarioPage() {
 
     setGenerating(true);
     setError(null);
+    setAccessBlock(null);
     try {
       const { data } = await requestScenarioGeneration(input);
       setDraft(generatedScenarioToDraft(data));
@@ -173,7 +205,11 @@ export function CustomScenarioPage() {
       setFormality(data.formality);
       setTone(data.tone);
     } catch (caught) {
-      if (
+      const block = aiBlockKindForError(caught);
+      if (block) {
+        setAccessBlock(block);
+        if (block === "quota_exhausted") void aiAccess.refresh();
+      } else if (
         caught instanceof AiRequestError &&
         caught.code === "scenario_refused"
       ) {
@@ -257,8 +293,9 @@ export function CustomScenarioPage() {
     );
   }
 
-  const errorAlert =
-    error?.kind === "refused" ? (
+  const errorAlert = accessBlock ? (
+    <AiAccessNotice kind={accessBlock} feature="scenario" />
+  ) : error?.kind === "refused" ? (
       <Alert
         tone="warning"
         title={t("tutor.refusedTitle")}
@@ -400,10 +437,18 @@ export function CustomScenarioPage() {
             </Field>
           </div>
 
+          {currentBlock && !accessBlock ? (
+            <AiAccessNotice kind={currentBlock} feature="scenario" />
+          ) : null}
+
           <Button
             onClick={() => void generate(Boolean(draft))}
             loading={generating}
-            disabled={generating || (!draft && idea.trim().length < 3)}
+            disabled={
+              generating ||
+              !aiAccess.canUse("scenario") ||
+              (!draft && idea.trim().length < 3)
+            }
             icon={<Sparkles className="h-4 w-4" />}
             className="w-full"
           >

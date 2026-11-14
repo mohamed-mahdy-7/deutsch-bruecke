@@ -1,9 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BookPlus, Check, Languages, RefreshCw } from "lucide-react";
 import type { GrammarArticle, WordDetails } from "@/types/domain";
 import { useAppPreferences } from "@/state/useAppPreferences";
+import { useAiAccess } from "@/state/AiAccessProvider";
 import { useProgress } from "@/state/ProgressProvider";
+import { lookupLocalWord } from "@/services/dictionary";
 import { lookupWord } from "@/services/wordLookup";
+import {
+  aiBlockKindForError,
+  AiAccessNotice,
+  type AiBlockKind,
+} from "@/components/ai/AiGate";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
@@ -37,9 +44,13 @@ export function WordSheet({
 }) {
   const { t } = useAppPreferences();
   const { progress, addVocabCard } = useProgress();
+  const aiAccess = useAiAccess();
+  const aiAccessRef = useRef(aiAccess);
+  aiAccessRef.current = aiAccess;
   const [details, setDetails] = useState<WordDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [block, setBlock] = useState<AiBlockKind | null>(null);
   const [justAdded, setJustAdded] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -51,6 +62,20 @@ export function WordSheet({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+
+    // Curated dictionary words never touch the AI, so they stay available to
+    // guests and when the quota is exhausted.
+    const needsAi = !lookupLocalWord(word);
+    const access = aiAccessRef.current;
+    if (needsAi && !access.canUse("word")) {
+      setBlock(access.status === "ready" ? "quota_exhausted" : access.status);
+      setLoading(false);
+      setError(false);
+      setDetails(null);
+      return;
+    }
+
+    setBlock(null);
     setLoading(true);
     setError(false);
     setDetails(null);
@@ -60,8 +85,17 @@ export function WordSheet({
       .then((result) => {
         if (!cancelled) setDetails(result.details);
       })
-      .catch(() => {
-        if (!cancelled) setError(true);
+      .catch((caught) => {
+        if (cancelled) return;
+        const nextBlock = aiBlockKindForError(caught);
+        if (nextBlock) {
+          setBlock(nextBlock);
+          if (nextBlock === "quota_exhausted") {
+            void aiAccessRef.current.refresh();
+          }
+          return;
+        }
+        setError(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -71,6 +105,16 @@ export function WordSheet({
       cancelled = true;
     };
   }, [open, word, context, level, reloadKey]);
+
+  useEffect(() => {
+    if (
+      aiAccess.status === "ready" &&
+      (block === "beta_required" || block === "signed_out")
+    ) {
+      setBlock(null);
+      setReloadKey((key) => key + 1);
+    }
+  }, [aiAccess.status, block]);
 
   const alreadySaved = Boolean(
     details &&
@@ -124,6 +168,8 @@ export function WordSheet({
           <Spinner />
           {t("tutor.word.loading")}
         </div>
+      ) : block ? (
+        <AiAccessNotice kind={block} feature="word" />
       ) : error ? (
         <div className="space-y-3 py-4">
           <Alert tone="danger">{t("tutor.word.error")}</Alert>

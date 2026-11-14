@@ -16,6 +16,11 @@ import type {
   WordResponse,
 } from "./schemas.js";
 import type { AiGateway } from "./services/ai.js";
+import {
+  createPermissiveAccessStore,
+  type AuthVerifier,
+} from "./services/supabaseAccess.js";
+import { AppError } from "./lib/errors.js";
 import { drillCache } from "./services/drillCache.js";
 import { scenarioCache } from "./services/scenarioCache.js";
 import { config } from "./config.js";
@@ -139,8 +144,23 @@ const gateway: AiGateway = {
 let server: Server;
 let baseUrl: string;
 
+const authVerifier: AuthVerifier = {
+  async verify(token) {
+    if (token === "test-token") return { id: "test-user", email: "t@example.test" };
+    throw new AppError(401, "invalid_token", "invalid token");
+  },
+};
+
 beforeAll(async () => {
-  const app = createApp({ gateway });
+  const app = createApp({
+    gateway,
+    auth: authVerifier,
+    access: createPermissiveAccessStore(),
+    authBypass: false,
+    aiDisabled: false,
+    betaGate: false,
+    globalDailyAiCap: 0,
+  });
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address() as AddressInfo;
@@ -171,7 +191,10 @@ async function postJson<T>(
 ): Promise<{ status: number; body: ApiSuccess<T> | ApiFailure }> {
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer test-token",
+    },
     body: JSON.stringify(payload),
   });
   return {

@@ -16,6 +16,7 @@ import {
 import type { AiAction, ChatMessage, Scenario } from "@/types/domain";
 import { SCENARIOS, getScenario } from "@/data/scenarios";
 import { useAppPreferences } from "@/state/useAppPreferences";
+import { useAiAccess } from "@/state/AiAccessProvider";
 import { useCustomScenarios } from "@/state/CustomScenariosProvider";
 import { useProgress } from "@/state/ProgressProvider";
 import {
@@ -41,6 +42,11 @@ import { EmptyState } from "@/components/ui/Feedback";
 import { ChatBubble } from "@/components/tutor/ChatBubble";
 import { AiPanel } from "@/components/tutor/AiPanel";
 import { WordSheet } from "@/components/tutor/WordSheet";
+import {
+  AiAccessNotice,
+  aiBlockKindForError,
+  type AiBlockKind,
+} from "@/components/ai/AiGate";
 
 export function TutorSessionPage() {
   const { scenarioId } = useParams();
@@ -96,6 +102,7 @@ export function TutorSessionPage() {
     completeTutorTurn,
   } = useProgress();
   const online = useOnlineStatus();
+  const aiAccess = useAiAccess();
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -103,6 +110,7 @@ export function TutorSessionPage() {
   const [safeMode, setSafeMode] = useState(false);
   const [aiMode, setAiMode] = useState<AiMode | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorBlock, setErrorBlock] = useState<AiBlockKind | null>(null);
   const [failed, setFailed] = useState<{ messageId: string; text: string } | null>(
     null,
   );
@@ -198,6 +206,7 @@ export function TutorSessionPage() {
     setConversationId(null);
     setInput("");
     setError(null);
+    setErrorBlock(null);
     setFailed(null);
     setSpeechError(null);
     const existing = ensureConversation(scenario);
@@ -213,6 +222,18 @@ export function TutorSessionPage() {
       alive = false;
     };
   }, []);
+
+  // A redeemed invite or a fresh sign-in clears the block message so the
+  // learner can immediately retry the turn they already typed.
+  useEffect(() => {
+    if (
+      aiAccess.status === "ready" &&
+      (errorBlock === "beta_required" || errorBlock === "signed_out")
+    ) {
+      setError(null);
+      setErrorBlock(null);
+    }
+  }, [aiAccess.status, errorBlock]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -264,6 +285,7 @@ export function TutorSessionPage() {
   const sendTurn = async (text: string, existingMessageId?: string) => {
     if (!conversation || sending) return;
     setError(null);
+    setErrorBlock(null);
     setSpeechError(null);
     speech.stop();
     setSending(true);
@@ -314,7 +336,9 @@ export function TutorSessionPage() {
     } catch (caught) {
       const code = caught instanceof AiRequestError ? caught.code : "unknown";
       setError(code);
+      setErrorBlock(aiBlockKindForError(caught));
       setFailed({ messageId, text });
+      if (code === "quota_exhausted") void aiAccess.refresh();
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -323,7 +347,7 @@ export function TutorSessionPage() {
 
   const submit = () => {
     const text = input.trim();
-    if (!text || !conversation || sending || !online) return;
+    if (!text || !conversation || sending || !online || !canChat) return;
     setFailed(null);
     setInput("");
     void sendTurn(text);
@@ -339,6 +363,7 @@ export function TutorSessionPage() {
     if (conversationNext) setConversationId(conversationNext.id);
     setInput("");
     setError(null);
+    setErrorBlock(null);
     setFailed(null);
     setNewChatOpen(false);
     inputRef.current?.focus();
@@ -359,6 +384,16 @@ export function TutorSessionPage() {
       : error === "network" || error === "timeout"
         ? t("tutor.errorBody")
         : t("ai.unavailable");
+
+  const gateKind: AiBlockKind | null =
+    aiAccess.status === "ready"
+      ? aiAccess.remaining("chat") === 0
+        ? "quota_exhausted"
+        : null
+      : aiAccess.status;
+  const showGate = Boolean(gateKind && gateKind !== "loading" && !errorBlock);
+  const canChat =
+    aiAccess.status === "ready" && aiAccess.remaining("chat") !== 0;
 
   return (
     <div className="animate-fade-up">
@@ -517,30 +552,49 @@ export function TutorSessionPage() {
         </div>
 
         {error ? (
-          <div className="border-t border-danger/20 bg-danger/5 p-3">
-            <Alert
-              tone="danger"
-              title={t("tutor.errorTitle")}
-              action={
-                failed ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={retry}
-                    disabled={sending}
-                    icon={<RotateCcw className="h-3.5 w-3.5" />}
-                  >
-                    {t("tutor.retrySend")}
-                  </Button>
-                ) : undefined
-              }
-            >
-              {errorText}
-            </Alert>
+          <div
+            className={cn(
+              "border-t p-3",
+              errorBlock
+                ? "border-border/60 bg-card"
+                : "border-danger/20 bg-danger/5",
+            )}
+          >
+            {errorBlock ? (
+              <AiAccessNotice kind={errorBlock} feature="chat" />
+            ) : (
+              <Alert
+                tone="danger"
+                title={t("tutor.errorTitle")}
+                action={
+                  failed ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={retry}
+                      disabled={sending}
+                      icon={<RotateCcw className="h-3.5 w-3.5" />}
+                    >
+                      {t("tutor.retrySend")}
+                    </Button>
+                  ) : undefined
+                }
+              >
+                {errorText}
+              </Alert>
+            )}
           </div>
         ) : null}
 
         <div className="border-t border-border/60 bg-card p-3 sm:p-4">
+          {showGate && gateKind ? (
+            <AiAccessNotice
+              kind={gateKind}
+              feature="chat"
+              compact
+              className="mb-3"
+            />
+          ) : null}
           {speech.listening ? (
             <div className="mb-2 flex items-center gap-2 rounded-xl bg-primary-soft/60 px-3 py-1.5 text-xs font-bold text-primary">
               <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
@@ -611,7 +665,7 @@ export function TutorSessionPage() {
                   rows={2}
                   maxLength={500}
                   placeholder={t("tutor.placeholder")}
-                  disabled={!online}
+                  disabled={!online || !canChat}
                   className="ltr-field max-h-32 min-h-[2.75rem] w-full resize-none rounded-xl border border-input bg-background px-3.5 py-2.5 text-sm shadow-sm transition-colors placeholder:text-muted-foreground/70 focus:border-primary focus:outline-none focus:ring-2 focus:ring-ring/30 disabled:opacity-60"
                 />
               </div>
@@ -620,7 +674,7 @@ export function TutorSessionPage() {
                 type="submit"
                 size="icon"
                 loading={sending}
-                disabled={!input.trim() || !online || !conversation}
+                disabled={!input.trim() || !online || !conversation || !canChat}
                 aria-label={t("tutor.send")}
                 icon={<Send className="h-4 w-4 flip-rtl" aria-hidden="true" />}
               >

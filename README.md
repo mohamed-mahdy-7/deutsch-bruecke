@@ -201,6 +201,7 @@ All values live in a single root `.env` file. The API loads it with `dotenv`; Vi
 | `VITE_API_BASE_URL` | `/api` | Web | API base URL. Keep relative when a reverse proxy serves `/api`. |
 | `VITE_SUPABASE_URL` | empty | Web | Supabase project URL. Leave empty for guest-only mode. |
 | `VITE_SUPABASE_ANON_KEY` | empty | Web | Supabase anon/publishable key. Safe to expose; RLS enforces access. |
+| `VITE_AI_DEV_BYPASS` | `false` | Web | Local-only switch that lets the UI call AI routes without a Supabase session when the API runs with `AUTH_BYPASS_DEV=true`. Never enable in a deployed build. |
 | `NODE_ENV` | `development` | API, Web build | Enables production safeguards. Avoid storing it in the shared `.env`: Vite reads the same file, so `development` would downgrade builds (the web build script now forces `production`). Set it in the host environment instead. |
 | `PORT` | `8787` | API | API listening port. |
 | `CLIENT_ORIGIN` | `http://localhost:5173` | API | Allowed CORS origins, comma-separated. |
@@ -210,6 +211,20 @@ All values live in a single root `.env` file. The API loads it with `dotenv`; Vi
 | `GEMINI_API_KEY` | empty | API | Server-only Google Gemini credential. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | API | Gemini model ID. |
 | `AI_DEMO_MODE` | `false` | API | Hard override to the demo gateway when `true`. Never use publicly in production. |
+| `SUPABASE_URL` | falls back to `VITE_SUPABASE_URL` | API | Supabase project URL used to verify access tokens and call quota RPCs. |
+| `SUPABASE_ANON_KEY` | falls back to `VITE_SUPABASE_ANON_KEY` | API | Public anon key sent with the learner's own token. No `service_role` key is used. |
+| `BETA_GATE` | `false` | API | When `true`, only profiles with `approved = true` may call AI. Learners redeem an invite code in the app. |
+| `AI_DISABLED` | `false` | API | Kill switch. When `true`, every AI route returns `503 ai_disabled` before auth or provider work. |
+| `GLOBAL_DAILY_AI_CAP` | `0` | API | Total AI calls allowed per UTC day across all learners. `0` disables the breaker. |
+| `AI_QUOTA_CHAT` | `40` | API | Per-user chat turns per UTC day. |
+| `AI_QUOTA_SCENARIO` | `5` | API | Per-user scenario generations per UTC day. |
+| `AI_QUOTA_DRILL` | `10` | API | Per-user drill sessions per UTC day. |
+| `AI_QUOTA_WORD` | `60` | API | Per-user AI word lookups per UTC day. |
+| `AI_QUOTA_ASSIST` | `60` | API | Per-user explain/simplify/translate calls per UTC day. |
+| `AI_QUOTA_RECAP` | `5` | API | Reserved per-user recap allowance per UTC day. |
+| `PROVIDER_TIMEOUT_MS` | `25000` | API | Per-attempt provider timeout. Kept below the serverless function limit. |
+| `CHAT_HISTORY_TURNS` | `8` | API | Maximum previous chat turns forwarded to the provider. |
+| `AUTH_BYPASS_DEV` | `false` | API | Development-only escape hatch that accepts AI calls without a Supabase session. Always ignored when `NODE_ENV=production`. |
 | `CHAT_RATE_WINDOW_MINUTES` | `15` | API | Chat rate-limit window. |
 | `CHAT_RATE_MAX` | `30` | API | Chat requests per IP per window. |
 | `ASSIST_RATE_WINDOW_MINUTES` | `15` | API | Assist rate-limit window. |
@@ -249,6 +264,8 @@ Both live gateways reuse the same system prompts, Zod schemas, history window, a
     "uptimeSeconds": 3600,
     "requestCount": 1420,
     "rateLimitStore": "connected",
+    "aiEnabled": true,
+    "betaGate": true,
     "cache": { "scenarioEntries": 12, "drillEntries": 34 }
   }
 }
@@ -285,6 +302,73 @@ The server never silently enables demo mode in production.
 - The tutor is instructed to cap German at the learner's CEFR level and to keep corrections focused.
 
 > **Shared limits are optional.** Without `REDIS_URL`, rate limits are per process and reset on restart. Set `REDIS_URL` when running more than one API instance; if Redis becomes unreachable, the limiter opens a 15-second circuit breaker and falls back to its local memory store so requests keep working.
+
+### Closed-beta access control, quotas, and kill switch
+
+Every AI route (`/api/chat`, `/api/scenarios/generate`, `/api/drills/generate`, `/api/assist`, `/api/word`) runs the same guards, in this order:
+
+1. **Kill switch** — `AI_DISABLED=true` returns `503 ai_disabled` without touching auth or the provider.
+2. **Server-verified identity** — the API reads the bearer token and confirms it with Supabase Auth (`GET /auth/v1/user`). The client's user id is never trusted. A verified token is cached in memory for 30 seconds.
+3. **Per-IP limiter** — the existing rate limiters stay as a secondary abuse control.
+4. **Atomic database gate** — one `SECURITY DEFINER` RPC, `consume_ai_call(feature, limit, global_cap, beta_gate)`, checks the beta flag, the global daily cap, and the per-user daily quota, then increments both counters only when the call is allowed. A blocked user never burns shared budget.
+
+The browser calls the RPCs with the learner's own JWT, so **no `service_role` key exists in this project**. If Supabase is paused or unreachable, AI routes fail closed with `503 auth_unavailable` or `503 ai_access_unavailable`; non-AI features keep working.
+
+`GET /api/ai/entitlement` returns the quota meter without consuming a call:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "aiEnabled": true,
+    "betaGate": true,
+    "approved": true,
+    "quotas": {
+      "chat": { "limit": 40, "used": 3, "remaining": 37 },
+      "drill": { "limit": 10, "used": 1, "remaining": 9 }
+    },
+    "resetAt": "2026-01-02T00:00:00.000Z"
+  }
+}
+```
+
+Error codes the UI understands:
+
+| Code | HTTP | Meaning |
+| --- | --- | --- |
+| `auth_required` | 401 | No bearer token. The UI shows a sign-in prompt; guest mode keeps working elsewhere. |
+| `invalid_token` | 401 | Expired/revoked session. The UI asks the learner to sign in again. |
+| `beta_not_approved` | 403 | `BETA_GATE=true` and the profile is not approved. The UI shows the invite-code form. |
+| `quota_exhausted` | 429 | The learner's daily allowance for that feature is used. `details` carries `feature`, `limit`, `remaining`, and `resetAt`. |
+| `ai_global_cap` | 503 | The shared daily circuit breaker tripped. Try again tomorrow (UTC). |
+| `ai_disabled` | 503 | Operator kill switch. |
+| `ai_access_unavailable` / `auth_unavailable` | 503 | Supabase is unreachable; the server fails closed. |
+| `ai_provider_quota` | 429 | The AI provider returned 429. |
+| `ai_provider_auth` | 503 | Provider credential rejected. Details are hidden. |
+| `ai_upstream_unavailable` / `ai_timeout` | 502 / 504 | Provider outage or timeout. |
+
+Other cost controls:
+
+- Provider calls time out after `PROVIDER_TIMEOUT_MS` (25 s) and retry **at most once**, only for 429/5xx, with jittered backoff. Timeouts are never retried.
+- Chat history is trimmed to `CHAT_HISTORY_TURNS` (8) before the provider call.
+- Every endpoint has a per-response `max_tokens` cap; chat is 1,800 and assist/word are 700–900.
+- Identical concurrent requests from the same learner are coalesced in-process, so a double-click cannot trigger two provider calls.
+- Scenario and drill caches still short-circuit repeated identical requests.
+
+#### Creating an invite code
+
+Run this once per tester in the Supabase SQL editor (the table is not writable by clients):
+
+```sql
+insert into public.invite_codes (code, label, max_uses, expires_at)
+values ('BRUECKE-AMIRA', 'Amira', 1, now() + interval '14 days');
+```
+
+The learner signs in, opens any AI screen, and enters the code. `redeem_invite` marks `profiles.approved = true` and consumes one use atomically. To revoke access, set `approved = false`; to close the beta entirely, set `BETA_GATE=true` in the API environment.
+
+#### Local development without Supabase
+
+Set `AUTH_BYPASS_DEV=true` in the API environment and `VITE_AI_DEV_BYPASS=true` in the web environment. The API then skips token verification and database quotas, and the web app calls AI routes without a session. The bypass is ignored whenever `NODE_ENV=production`; a production build always requires a real token.
 
 ### AI response contract
 
@@ -392,7 +476,9 @@ Create a project at [supabase.com](https://supabase.com). Note the project URL a
 
 ### 2. Run the migration
 
-Open the Supabase **SQL Editor**, paste the contents of [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql), run it, then repeat with [`002_custom_scenarios.sql`](supabase/migrations/002_custom_scenarios.sql) and [`003_curriculum.sql`](supabase/migrations/003_curriculum.sql). Fresh projects run all three in order; existing projects only need the new migrations.
+Open the Supabase **SQL Editor**, paste the contents of [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql), run it, then repeat with [`002_custom_scenarios.sql`](supabase/migrations/002_custom_scenarios.sql), [`003_curriculum.sql`](supabase/migrations/003_curriculum.sql), and [`004_ai_access.sql`](supabase/migrations/004_ai_access.sql). Fresh projects run all four in order; existing projects only need the new migrations.
+
+`004_ai_access.sql` is required for any deployment where AI is enabled. It adds the beta flags, invite codes, and quota counters, and it narrows the `profiles` grants so a learner cannot approve themselves or change their role.
 
 The migrations create:
 
@@ -409,6 +495,9 @@ The migrations create:
 | `streaks` | Current/longest streak and last practice date |
 | `custom_scenarios` | Learner-generated scenarios stored as validated JSONB (`data`) plus timestamps |
 | `curriculum_completions` | Completed curriculum lesson ids and XP per learner |
+| `invite_codes` | Closed-beta invite codes with max uses and expiry (RPC-only, no client access) |
+| `ai_daily_usage` | Per-user, per-feature, per-UTC-day AI counters |
+| `ai_global_usage` | One row per UTC day for the shared circuit breaker |
 
 It also adds indexes, check constraints, foreign keys with cascade deletes, RLS policies scoped to `auth.uid()`, and revokes anonymous access.
 

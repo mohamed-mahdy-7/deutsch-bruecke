@@ -44,6 +44,7 @@ import { Alert } from "@/components/ui/Alert";
 import { Field, inputCn, selectCn } from "@/components/ui/Field";
 import { Modal } from "@/components/ui/Modal";
 import { Spinner } from "@/components/ui/Spinner";
+import { AiQuotaSummary } from "@/components/ai/AiGate";
 
 type DialogKind = "reset" | "signout" | "retake" | null;
 
@@ -558,6 +559,7 @@ export function ProfilePage() {
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
               {t("profile.aiBody")}
             </p>
+            <AiQuotaSummary className="mt-4" />
             {aiMode === "demo" ? (
               <Alert tone="warning" className="mt-3">
                 {t("profile.aiDemoBody")}

@@ -43,6 +43,14 @@ import {
 } from "../prompts/assist.js";
 import type { ApiScenario } from "../data/scenarios.js";
 import { AppError } from "../lib/errors.js";
+import {
+  mapProviderError,
+  normalizeAnthropicError,
+  ProviderHttpError,
+  ProviderNetworkError,
+  ProviderTimeoutError,
+  withProviderRetry,
+} from "./provider.js";
 
 type Level = "A1" | "A2" | "B1";
 type Dialect = "egyptian" | "levantine" | "gulf" | "maghrebi" | "msa" | "other";
@@ -103,15 +111,16 @@ export async function requestStructuredJson<T>(
       raw = (await generate(requestMessages)).trim();
     } catch (error) {
       if (error instanceof AppError) throw error;
-      console.error(
-        "[ai] Provider request failed:",
-        error instanceof Error ? error.message : "unknown error",
-      );
-      throw new AppError(
-        502,
-        "ai_upstream_error",
-        "The tutor service is temporarily unavailable. Please try again.",
-      );
+      // Log only the error class/status. Provider bodies can echo request
+      // metadata, so they never reach logs or the browser.
+      console.warn("[ai] Provider request failed:", {
+        name: error instanceof Error ? error.name : "unknown",
+        status:
+          error && typeof (error as { status?: unknown }).status === "number"
+            ? (error as { status: number }).status
+            : undefined,
+      });
+      throw mapProviderError(error);
     }
 
     if (!raw) {
@@ -230,6 +239,8 @@ abstract class PromptGateway implements AiGateway {
       ],
       tutorResponseSchema,
       buildTutorRepairPrompt(),
+      // One tutor turn: reply + translation + up to 3 corrections.
+      1_800,
     );
   }
 
@@ -254,6 +265,7 @@ abstract class PromptGateway implements AiGateway {
         messages,
         explainResponseSchema,
         repairInstruction,
+        900,
       );
     }
     if (action === "simplify") {
@@ -262,6 +274,7 @@ abstract class PromptGateway implements AiGateway {
         messages,
         simplifyResponseSchema,
         repairInstruction,
+        700,
       );
     }
     return this.requestJson(
@@ -269,6 +282,7 @@ abstract class PromptGateway implements AiGateway {
       messages,
       translateResponseSchema,
       repairInstruction,
+      700,
     );
   }
 
@@ -282,6 +296,7 @@ abstract class PromptGateway implements AiGateway {
       [{ role: "user", content: buildWordUserPrompt(word, context) }],
       wordResponseSchema,
       "Return only the exact JSON object requested, with article and plural included for nouns. No markdown.",
+      700,
     );
   }
 
@@ -295,6 +310,7 @@ abstract class PromptGateway implements AiGateway {
       [{ role: "user", content: buildScenarioUserPrompt(input) }],
       scenarioModelResponseSchema,
       buildScenarioRepairPrompt(),
+      1_800,
     );
   }
 
@@ -324,8 +340,10 @@ class AnthropicGateway extends PromptGateway {
     super();
     this.client = new Anthropic({
       apiKey,
-      maxRetries: 1,
-      timeout: 30_000,
+      // Retries are handled uniformly by withProviderRetry so both providers
+      // share one bounded backoff policy (no retry storms).
+      maxRetries: 0,
+      timeout: config.providerTimeoutMs,
     });
   }
 
@@ -334,19 +352,25 @@ class AnthropicGateway extends PromptGateway {
     messages: ModelMessage[],
     maxTokens = 1_800,
   ): Promise<string> {
-    const response = await this.client.messages.create({
-      model: config.anthropicModel,
-      max_tokens: maxTokens,
-      temperature: 0.45,
-      system,
-      messages,
-    });
+    return withProviderRetry(async () => {
+      try {
+        const response = await this.client.messages.create({
+          model: config.anthropicModel,
+          max_tokens: maxTokens,
+          temperature: 0.45,
+          system,
+          messages,
+        });
 
-    return response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n")
-      .trim();
+        return response.content
+          .filter((block): block is Anthropic.TextBlock => block.type === "text")
+          .map((block) => block.text)
+          .join("\n")
+          .trim();
+      } catch (error) {
+        throw normalizeAnthropicError(error);
+      }
+    });
   }
 
   protected override requestJson<T>(
@@ -392,73 +416,62 @@ class GeminiGateway extends PromptGateway {
     messages: ModelMessage[],
     maxTokens = 1_800,
   ): Promise<string> {
-    let response: Response;
-    try {
-      // The key travels in a header, never in the URL or logs.
-      response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-goog-api-key": this.apiKey,
-          },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: system }] },
-            contents: messages.map((message) => ({
-              role: message.role === "assistant" ? "model" : "user",
-              parts: [{ text: message.content }],
-            })),
-            generationConfig: {
-              temperature: 0.45,
-              maxOutputTokens: maxTokens,
-              responseMimeType: "application/json",
+    const payload = await withProviderRetry(async () => {
+      let response: Response;
+      try {
+        // The key travels in a header, never in the URL or logs.
+        response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-goog-api-key": this.apiKey,
             },
-          }),
-          signal: AbortSignal.timeout(30_000),
-        },
-      );
-    } catch (error) {
-      console.error(
-        "[ai] Gemini request failed:",
-        error instanceof Error ? error.message : "unknown error",
-      );
-      throw new AppError(
-        502,
-        "ai_upstream_error",
-        "The tutor service is temporarily unavailable. Please try again.",
-      );
-    }
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: system }] },
+              contents: messages.map((message) => ({
+                role: message.role === "assistant" ? "model" : "user",
+                parts: [{ text: message.content }],
+              })),
+              generationConfig: {
+                temperature: 0.45,
+                maxOutputTokens: maxTokens,
+                responseMimeType: "application/json",
+              },
+            }),
+            signal: AbortSignal.timeout(config.providerTimeoutMs),
+          },
+        );
+      } catch (error) {
+        const name = error instanceof Error ? error.name : "";
+        if (name === "TimeoutError" || name === "AbortError") {
+          throw new ProviderTimeoutError();
+        }
+        throw new ProviderNetworkError();
+      }
 
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      console.error(
-        `[ai] Gemini returned HTTP ${response.status}: ${detail.slice(0, 500)}`,
-      );
-      throw new AppError(
-        502,
-        "ai_upstream_error",
-        "The tutor service is temporarily unavailable. Please try again.",
-      );
-    }
+      if (!response.ok) {
+        // Status only: never log the provider body.
+        console.warn("[ai] Gemini HTTP failure:", { status: response.status });
+        throw new ProviderHttpError(response.status);
+      }
 
-    const payload = (await response
-      .json()
-      .catch(() => null)) as GeminiGenerateContentResponse | null;
-    if (!payload) {
-      throw new AppError(
-        502,
-        "ai_invalid_response",
-        "The tutor sent an unreadable response. Please try again.",
-      );
-    }
-    if (payload.promptFeedback?.blockReason) {
-      throw new AppError(
-        422,
-        "ai_prompt_blocked",
-        "The tutor could not answer that message. Please try rephrasing it.",
-      );
-    }
+      const parsed = (await response
+        .json()
+        .catch(() => null)) as GeminiGenerateContentResponse | null;
+      if (!parsed) {
+        throw new ProviderNetworkError();
+      }
+      if (parsed.promptFeedback?.blockReason) {
+        throw new AppError(
+          422,
+          "ai_prompt_blocked",
+          "The tutor could not answer that message. Please try rephrasing it.",
+        );
+      }
+      return parsed;
+    });
 
     return (payload.candidates?.[0]?.content?.parts ?? [])
       .map((part) => part.text ?? "")

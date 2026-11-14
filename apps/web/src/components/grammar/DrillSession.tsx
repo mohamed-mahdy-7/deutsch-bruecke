@@ -36,6 +36,12 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/Progress";
 import { EmptyState } from "@/components/ui/Feedback";
+import { useAiAccess } from "@/state/AiAccessProvider";
+import {
+  AiAccessNotice,
+  aiBlockKindForError,
+  type AiBlockKind,
+} from "@/components/ai/AiGate";
 
 type Phase = "loading" | "error" | "session" | "result" | "empty";
 type ErrorKind = "rate" | "offline" | "generic";
@@ -117,6 +123,7 @@ export function DrillSession({
   onExit: () => void;
 }) {
   const { t, language } = useAppPreferences();
+  const aiAccess = useAiAccess();
   const { recordDrillAnswer } = useProgress();
   const [phase, setPhase] = useState<Phase>("loading");
   const [questions, setQuestions] = useState<DrillQuestion[]>([]);
@@ -128,6 +135,7 @@ export function DrillSession({
   const [aiMode, setAiMode] = useState<AiMode | "unknown">("unknown");
   const [fallbackCount, setFallbackCount] = useState(0);
   const [errorKind, setErrorKind] = useState<ErrorKind>("generic");
+  const [accessBlock, setAccessBlock] = useState<AiBlockKind | null>(null);
   const [requestId, setRequestId] = useState(0);
 
   const forceNextRef = useRef(false);
@@ -149,6 +157,7 @@ export function DrillSession({
       setCorrectCount(0);
       setShowHint(false);
       setFallbackCount(0);
+      setAccessBlock(null);
 
       try {
         const relevantWeakSpots = weakSpotsForTopic(
@@ -178,8 +187,11 @@ export function DrillSession({
       } catch (error) {
         forceNextRef.current = false;
         if (!active) return;
+        const block = aiBlockKindForError(error);
+        setAccessBlock(block);
         setErrorKind(classifyError(error));
         setPhase("error");
+        if (block === "quota_exhausted") void aiAccess.refresh();
       }
     };
 
@@ -188,6 +200,18 @@ export function DrillSession({
       active = false;
     };
   }, [topic, level, requestId]);
+
+  // Redeeming an invite (or signing in from another tab) should resume the
+  // session the learner was trying to start, not leave them on the error card.
+  useEffect(() => {
+    if (
+      aiAccess.status === "ready" &&
+      (accessBlock === "beta_required" || accessBlock === "signed_out")
+    ) {
+      setAccessBlock(null);
+      setRequestId((value) => value + 1);
+    }
+  }, [aiAccess.status, accessBlock]);
 
   const startStatic = () => {
     const bank = staticDrillBank(topic).map((question) => ({
@@ -257,6 +281,29 @@ export function DrillSession({
   }
 
   if (phase === "error") {
+    if (accessBlock) {
+      return (
+        <div className="mx-auto max-w-2xl space-y-3">
+          <AiAccessNotice kind={accessBlock} feature="drill" />
+          <div className="flex flex-wrap justify-center gap-2">
+            {hasStaticBank ? (
+              <Button variant="outline" onClick={startStatic}>
+                {t("grammar.useStatic")}
+              </Button>
+            ) : null}
+            <Button variant="ghost" onClick={onExit}>
+              {t("grammar.backToTopics")}
+            </Button>
+          </div>
+          {hasStaticBank ? (
+            <p className="text-center text-xs text-muted-foreground">
+              {t("grammar.staticNote")}
+            </p>
+          ) : null}
+        </div>
+      );
+    }
+
     const title = t("grammar.generationErrorTitle");
     const body =
       errorKind === "offline"

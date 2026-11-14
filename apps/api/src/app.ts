@@ -8,10 +8,26 @@ import {
 } from "./data/scenarios.js";
 import { AppError } from "./lib/errors.js";
 import { asyncHandler, errorHandler, notFoundHandler } from "./lib/http.js";
+import { dedupeInFlight, hashKey } from "./lib/dedupe.js";
 import { metrics } from "./lib/metrics.js";
 import { createRateLimiter } from "./middleware/rateLimit.js";
 import { rateLimitStoreStatus } from "./middleware/rateLimitStore.js";
 import { requestObservability } from "./middleware/observability.js";
+import {
+  aiKillSwitch,
+  nextUtcMidnightIso,
+  requireAiAccess,
+  requireAuth,
+} from "./middleware/aiAccess.js";
+import {
+  AI_FEATURES,
+  createPermissiveAccessStore,
+  createSupabaseAccessStore,
+  createSupabaseAuthVerifier,
+  type AiAccessStore,
+  type AiFeature,
+  type AuthVerifier,
+} from "./services/supabaseAccess.js";
 import {
   assistRequestSchema,
   chatRequestSchema,
@@ -35,6 +51,16 @@ import {
 export interface CreateAppOptions {
   /** Injectable gateway keeps endpoint tests offline and deterministic. */
   gateway?: AiGateway;
+  /** Injectable token verifier. Defaults to Supabase Auth. */
+  auth?: AuthVerifier;
+  /** Injectable quota/beta store. Defaults to Supabase RPCs. */
+  access?: AiAccessStore;
+  /** Test overrides for environment-level switches. */
+  aiDisabled?: boolean;
+  betaGate?: boolean;
+  authBypass?: boolean;
+  globalDailyAiCap?: number;
+  quotas?: Partial<Record<AiFeature, number>>;
 }
 
 function recordAiRequest(endpoint: string, gateway: AiGateway): void {
@@ -58,6 +84,33 @@ function recordCacheEvent(
 export function createApp(options: CreateAppOptions = {}): express.Express {
   const app = express();
   const resolveGateway = (): AiGateway => options.gateway ?? getAiGateway();
+
+  const authBypass = options.authBypass ?? config.authBypass;
+  const aiDisabled = options.aiDisabled ?? config.aiDisabled;
+  const betaGate = options.betaGate ?? config.betaGate;
+  const globalDailyAiCap =
+    options.globalDailyAiCap ?? config.globalDailyAiCap;
+  const quotaLimits: Record<AiFeature, number> = {
+    ...config.quotas,
+    ...options.quotas,
+  };
+
+  const authVerifier = options.auth ?? createSupabaseAuthVerifier();
+  const accessStore =
+    options.access ??
+    (authBypass ? createPermissiveAccessStore() : createSupabaseAccessStore());
+
+  const killSwitch = aiKillSwitch(aiDisabled);
+  const authGuard = requireAuth({ verifier: authVerifier, bypass: authBypass });
+  const accessGuard = (feature: AiFeature) =>
+    requireAiAccess({
+      access: accessStore,
+      feature,
+      limit: quotaLimits[feature],
+      betaGate,
+      globalCap: globalDailyAiCap,
+      bypass: authBypass,
+    });
 
   app.disable("x-powered-by");
   // Observability runs before anything that can fail so every response,
@@ -145,6 +198,8 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
         uptimeSeconds: Math.round(process.uptime()),
         requestCount: metrics.total("http_requests_total"),
         rateLimitStore: rateLimitStoreStatus(),
+        aiEnabled: !aiDisabled,
+        betaGate,
         cache: {
           scenarioEntries: scenarioCache.size,
           drillEntries: drillCache.size,
@@ -152,6 +207,68 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
       },
     });
   });
+
+  /**
+   * Quota meter data. Requires a signed-in user but does NOT consume quota.
+   * Returns usable data even when the kill switch is on so the UI can show a
+   * calm "temporarily unavailable" state instead of an error loop.
+   */
+  app.get(
+    "/api/ai/entitlement",
+    authGuard,
+    asyncHandler(async (_req, res) => {
+      const userId = res.locals.authUserId as string;
+      const accessToken = res.locals.authAccessToken as string;
+
+      if (authBypass) {
+        const quotas = Object.fromEntries(
+          AI_FEATURES.map((feature) => {
+            const limit = quotaLimits[feature];
+            return [feature, { limit, used: 0, remaining: limit }];
+          }),
+        );
+        res.setHeader("cache-control", "no-store");
+        res.json({
+          ok: true,
+          data: {
+            aiEnabled: !aiDisabled,
+            betaGate,
+            approved: true,
+            quotas,
+            resetAt: nextUtcMidnightIso(),
+          },
+        });
+        return;
+      }
+
+      const entitlement = await accessStore.entitlement({
+        userId,
+        accessToken,
+      });
+      const quotas = Object.fromEntries(
+        AI_FEATURES.map((feature) => {
+          const limit = quotaLimits[feature];
+          const used = entitlement.usage[feature] ?? 0;
+          return [
+            feature,
+            { limit, used, remaining: Math.max(0, limit - used) },
+          ];
+        }),
+      );
+
+      res.setHeader("cache-control", "no-store");
+      res.json({
+        ok: true,
+        data: {
+          aiEnabled: !aiDisabled,
+          betaGate,
+          approved: entitlement.approved,
+          quotas,
+          resetAt: nextUtcMidnightIso(),
+        },
+      });
+    }),
+  );
 
   app.get("/api/metrics", (_req, res) => {
     res.setHeader("cache-control", "no-store");
@@ -170,7 +287,10 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
 
   app.post(
     "/api/scenarios/generate",
+    killSwitch,
+    authGuard,
     scenarioLimiter,
+    accessGuard("scenario"),
     asyncHandler(async (req, res) => {
       const input = scenarioRequestSchema.parse(req.body);
       const gateway = resolveGateway();
@@ -212,7 +332,10 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
 
   app.post(
     "/api/drills/generate",
+    killSwitch,
+    authGuard,
     drillLimiter,
+    accessGuard("drill"),
     asyncHandler(async (req, res) => {
       const input = drillRequestSchema.parse(req.body);
       const gateway = resolveGateway();
@@ -242,7 +365,10 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
 
   app.post(
     "/api/chat",
+    killSwitch,
+    authGuard,
     chatLimiter,
+    accessGuard("chat"),
     asyncHandler(async (req, res) => {
       const input = chatRequestSchema.parse(req.body);
       let scenario = findApiScenario(input.scenarioId);
@@ -277,14 +403,30 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
       }
 
       const gateway = resolveGateway();
-      const data = await gateway.tutor({
-        level: input.level,
-        dialect: input.dialect,
-        safeMode: input.safeMode,
-        learnerMessage: input.learnerMessage,
-        history: input.history,
-        scenario,
-      });
+      // Cost shaping: only the most recent turns are forwarded.
+      const history = input.history.slice(-config.chatHistoryTurns);
+      const userId = String(res.locals.authUserId ?? "anonymous");
+      const dedupeKey = `chat:${userId}:${hashKey(
+        JSON.stringify({
+          scenarioId: input.scenarioId,
+          level: input.level,
+          dialect: input.dialect,
+          safeMode: input.safeMode,
+          learnerMessage: input.learnerMessage,
+          customScenario: input.customScenario ?? null,
+          history,
+        }),
+      )}`;
+      const data = await dedupeInFlight(dedupeKey, () =>
+        gateway.tutor({
+          level: input.level,
+          dialect: input.dialect,
+          safeMode: input.safeMode,
+          learnerMessage: input.learnerMessage,
+          history,
+          scenario,
+        }),
+      );
 
       recordAiRequest("/api/chat", gateway);
       res.json({ ok: true, data, meta: { mode: gateway.mode } });
@@ -293,15 +435,24 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
 
   app.post(
     "/api/assist",
+    killSwitch,
+    authGuard,
     assistLimiter,
+    accessGuard("assist"),
     asyncHandler(async (req, res) => {
       const input = assistRequestSchema.parse(req.body);
       const gateway = resolveGateway();
-      const data = await gateway.assist(
-        input.action,
-        input.text,
-        input.level,
-        input.dialect,
+      const userId = String(res.locals.authUserId ?? "anonymous");
+      const dedupeKey = `assist:${userId}:${hashKey(
+        JSON.stringify(input),
+      )}`;
+      const data = await dedupeInFlight(dedupeKey, () =>
+        gateway.assist(
+          input.action,
+          input.text,
+          input.level,
+          input.dialect,
+        ),
       );
 
       const outputSchema =
@@ -320,11 +471,18 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
 
   app.post(
     "/api/word",
+    killSwitch,
+    authGuard,
     wordLimiter,
+    accessGuard("word"),
     asyncHandler(async (req, res) => {
       const input = wordRequestSchema.parse(req.body);
       const gateway = resolveGateway();
-      const data = await gateway.word(input.word, input.context, input.level);
+      const userId = String(res.locals.authUserId ?? "anonymous");
+      const dedupeKey = `word:${userId}:${hashKey(JSON.stringify(input))}`;
+      const data = await dedupeInFlight(dedupeKey, () =>
+        gateway.word(input.word, input.context, input.level),
+      );
       recordAiRequest("/api/word", gateway);
       res.json({ ok: true, data, meta: { mode: gateway.mode } });
     }),
