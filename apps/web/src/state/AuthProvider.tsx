@@ -10,6 +10,8 @@ import {
 import type { Session, User } from "@supabase/supabase-js";
 import { isSupabaseConfigured } from "@/config/env";
 import { supabase } from "@/services/supabaseClient";
+import { clearLocalProgress } from "@/services/localStore";
+import { clearLocalCustomScenarios } from "@/services/customScenarioStore";
 
 export type AuthMode = "loading" | "anonymous" | "guest" | "authenticated";
 
@@ -138,11 +140,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    const ownerId = user?.id;
     if (supabase) {
       await supabase.auth.signOut();
     }
     try {
       localStorage.removeItem(GUEST_KEY);
+      clearLocalProgress();
+      if (ownerId) clearLocalCustomScenarios(ownerId);
+      else clearLocalCustomScenarios("guest");
     } catch {
       // no-op
     }
@@ -150,7 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setSession(null);
     setMode("anonymous");
-  }, []);
+  }, [user]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

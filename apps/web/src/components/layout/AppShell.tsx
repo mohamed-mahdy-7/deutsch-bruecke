@@ -31,6 +31,7 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { Brand, LogoMark } from "@/components/ui/Logo";
 import { Alert } from "@/components/ui/Alert";
 import { ProgressBar } from "@/components/ui/Progress";
+import { SyncStatusIndicator } from "@/components/layout/SyncStatusIndicator";
 import { LanguageToggle, ThemeToggle } from "@/components/layout/Toggles";
 
 const SIDEBAR_STORAGE_KEY = "deutsch-bruecke:sidebar-collapsed:v1";
@@ -474,7 +475,10 @@ export function AppShell() {
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="hidden sm:block">
+              <SyncStatusIndicator />
+            </div>
             <LanguageToggle />
             <ThemeToggle />
             <Link
