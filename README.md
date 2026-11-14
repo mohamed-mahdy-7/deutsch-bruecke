@@ -30,6 +30,7 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 - [Phase 3](#phase-3)
 - [Phase 4](#phase-4)
 - [Deploy for free](#deploy-for-free)
+- [Deploy on Vercel (free)](#deploy-on-vercel-free)
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
 
@@ -915,6 +916,30 @@ Cloudflare Pages (web):
 - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (optional, for accounts)
 
 Secrets: all `*_API_KEY` values and Supabase keys. Never commit `.env`.
+
+## Deploy on Vercel (free)
+
+Deploy as one Vercel project (static web app + Express API as a serverless function):
+
+- Root Directory: repository root
+- Install Command: `npm install`
+- Build Command: `npm run build`
+- Output Directory: `apps/web/dist`
+- Node.js Version: 20.x (set in the Vercel dashboard)
+
+The Express app is exported from `api/index.ts` without calling `app.listen()`. `vercel.json` rewrites `/api/*` to the function and falls back all other routes to `/index.html`. `VITE_API_BASE_URL` defaults to `/api`, so the browser calls the same origin.
+
+Notes:
+- Hobby serverless functions are limited to 10 seconds (`maxDuration`), so very slow AI turns may time out. Keep prompts short or upgrade for longer limits.
+- Rate limiting and caching are in-memory and per-instance in serverless; counters reset between invocations. The API still returns a clear 503 when no AI key is configured and never falls back to demo replies in production.
+- `.env` is never committed; set all secrets in the Vercel dashboard.
+
+Required environment variables on Vercel:
+- `NODE_ENV=production`
+- `CLIENT_ORIGIN` — your Vercel deployment URL (comma-separated for previews)
+- `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` (secret)
+- Optional: `AI_PROVIDER`, `AI_DEMO_MODE=false`, `REDIS_URL`, `TRUST_PROXY=1`, rate-limit overrides, `LOG_REQUESTS`
+- Web build needs `VITE_API_BASE_URL=/api` (default) plus optional Supabase keys.
 
 ---
 
