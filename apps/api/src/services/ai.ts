@@ -209,6 +209,8 @@ export interface AiGateway {
  * Anthropic and Gemini receive identical system prompts, history windows,
  * Zod contracts, and repair instructions.
  */
+let geminiStructuredOutputDisabled = false;
+
 const tutorResponseJsonSchema = {
   type: "object",
   properties: {
@@ -435,10 +437,10 @@ class AnthropicGateway extends PromptGateway {
     repairInstruction: string,
     maxTokens?: number,
     normalize?: (value: unknown) => unknown,
-    responseSchema?: unknown,
+    _responseSchema?: unknown,
   ): Promise<T> {
     return requestStructuredJson(
-      (nextMessages) => this.generate(system, nextMessages, maxTokens, responseSchema),
+      (nextMessages) => this.generate(system, nextMessages, maxTokens),
       messages,
       schema,
       repairInstruction,
@@ -512,9 +514,25 @@ class GeminiGateway extends PromptGateway {
       }
 
       if (!response.ok) {
-        // Status only: never log the provider body.
-        console.warn("[ai] Gemini HTTP failure:", { status: response.status });
-        throw new ProviderHttpError(response.status);
+        let providerMessage = "";
+        try {
+          const bodyText = await response.text();
+          let parsed = null;
+          try { parsed = JSON.parse(bodyText); } catch { parsed = null; }
+          const rawMessage = parsed?.error?.message ?? bodyText;
+          providerMessage = String(rawMessage).slice(0, 300);
+          if (parsed?.error?.details) {
+            try {
+              const details = JSON.stringify(parsed.error.details).slice(0, 300);
+              providerMessage = `${providerMessage} ${details}`.slice(0, 300);
+            } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
+        console.warn("[ai] Gemini HTTP failure:", {
+          status: response.status,
+          message: providerMessage,
+        });
+        throw new ProviderHttpError(response.status, providerMessage);
       }
 
       const parsed = (await response
@@ -539,7 +557,7 @@ class GeminiGateway extends PromptGateway {
       .trim();
   }
 
-  protected override requestJson<T>(
+  protected override async requestJson<T>(
     system: string,
     messages: ModelMessage[],
     schema: ZodType<T, ZodTypeDef, unknown>,
@@ -548,13 +566,37 @@ class GeminiGateway extends PromptGateway {
     normalize?: (value: unknown) => unknown,
     responseSchema?: unknown,
   ): Promise<T> {
-    return requestStructuredJson(
-      (nextMessages) => this.generate(system, nextMessages, maxTokens, responseSchema),
-      messages,
-      schema,
-      repairInstruction,
-      normalize,
-    );
+    const tryOnce = async (useSchema: boolean): Promise<T> =>
+      requestStructuredJson(
+        (nextMessages) =>
+          this.generate(system, nextMessages, maxTokens, useSchema ? responseSchema : undefined),
+        messages,
+        schema,
+        repairInstruction,
+        normalize,
+      );
+
+    const canUseSchema =
+      Boolean(responseSchema) &&
+      config.geminiStructuredOutput &&
+      !geminiStructuredOutputDisabled;
+
+    try {
+      return await tryOnce(canUseSchema);
+    } catch (error) {
+      if (
+        canUseSchema &&
+        error instanceof ProviderHttpError &&
+        error.status === 400
+      ) {
+        geminiStructuredOutputDisabled = true;
+        console.warn(
+          "[ai] Gemini rejected responseSchema; retrying without it for this process.",
+        );
+        return await tryOnce(false);
+      }
+      throw error;
+    }
   }
 }
 

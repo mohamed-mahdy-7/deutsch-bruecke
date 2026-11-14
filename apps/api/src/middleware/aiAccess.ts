@@ -140,6 +140,9 @@ export function requireAiAccess(options: {
         res.locals.aiQuota = decision;
 
         if (decision.allowed) {
+          res.locals.aiQuotaConsumed = true;
+          res.locals.aiQuotaFeature = options.feature;
+          res.locals.aiQuotaLimit = options.limit;
           next();
           return;
         }

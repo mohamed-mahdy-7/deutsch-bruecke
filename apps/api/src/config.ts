@@ -139,6 +139,7 @@ export const config = {
   geminiApiKey: geminiKey,
   geminiModel:
     process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash",
+  geminiStructuredOutput: boolFromEnv(process.env.GEMINI_STRUCTURED_OUTPUT),
   aiProvider,
   aiMode,
   trustProxy: process.env.TRUST_PROXY === "1",

@@ -102,6 +102,23 @@ export class MemoryAccessStore implements AiAccessStore {
     };
   }
 
+  async refund(input: {
+    userId: string;
+    accessToken: string;
+    feature: AiFeature;
+    limit: number;
+  }): Promise<void> {
+    try {
+      const day = this.today();
+      this.rollover(day);
+      const key = `${input.userId}:${input.feature}`;
+      const current = this.counts.get(key) ?? 0;
+      if (current > 0) this.counts.set(key, current - 1);
+    } catch {
+      // ignore
+    }
+  }
+
   async entitlement(input: {
     userId: string;
     accessToken: string;

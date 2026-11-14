@@ -72,6 +72,12 @@ export interface AiAccessStore {
     betaGate: boolean;
     globalCap: number;
   }): Promise<QuotaDecision>;
+  refund(input: {
+    userId: string;
+    accessToken: string;
+    feature: AiFeature;
+    limit: number;
+  }): Promise<void>;
   entitlement(input: {
     userId: string;
     accessToken: string;
@@ -282,6 +288,20 @@ export function createSupabaseAccessStore(
       };
     },
 
+    async refund(input): Promise<void> {
+      // Best-effort: decrement the counters if the RPC exists. Swallow any
+      // failure so a missing migration never breaks the request path.
+      try {
+        await postgrest(
+          "/rest/v1/rpc/refund_ai_call",
+          { p_feature: input.feature, p_user_limit: input.limit },
+          input.accessToken,
+          options,
+        );
+      } catch {
+        // ignore
+      }
+    },
     async entitlement(input): Promise<AiEntitlement> {
       if (!url || !anonKey) throw unconfigured();
 
@@ -335,6 +355,9 @@ export function createPermissiveAccessStore(): AiAccessStore {
         limit: input.limit,
         remaining: Math.max(0, input.limit - 1),
       };
+    },
+    async refund() {
+      // Permissive (bypass) mode never persists counters.
     },
     async entitlement() {
       return { approved: true, usage: {} };

@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import type { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
 import { config } from "./config.js";
 import {
@@ -487,6 +488,23 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
       res.json({ ok: true, data, meta: { mode: gateway.mode } });
     }),
   );
+
+  // Refund the daily quota when an AI call fails after it was consumed, so a
+  // provider outage or validation failure does not charge the learner.
+  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if (res.locals.aiQuotaConsumed && !authBypass) {
+      const userId = res.locals.authUserId as string | undefined;
+      const accessToken = res.locals.authAccessToken as string | undefined;
+      const feature = res.locals.aiQuotaFeature as AiFeature | undefined;
+      const limit = res.locals.aiQuotaLimit as number | undefined;
+      if (userId && accessToken && feature && limit) {
+        void accessStore
+          .refund({ userId, accessToken, feature, limit })
+          .catch(() => undefined);
+      }
+    }
+    next(err);
+  });
 
   app.use(notFoundHandler);
   app.use(errorHandler);

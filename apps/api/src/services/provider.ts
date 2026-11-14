@@ -11,11 +11,13 @@ import { AppError } from "../lib/errors.js";
 
 export class ProviderHttpError extends Error {
   readonly status: number;
+  readonly providerMessage: string;
 
-  constructor(status: number) {
+  constructor(status: number, providerMessage = "") {
     super(`provider_http_${status}`);
     this.name = "ProviderHttpError";
     this.status = status;
+    this.providerMessage = providerMessage;
   }
 }
 
@@ -58,7 +60,7 @@ export function mapProviderError(error: unknown): AppError {
     if (error.status >= 500) {
       return new AppError(502, "ai_upstream_unavailable", UNAVAILABLE_MESSAGE);
     }
-    return new AppError(502, "ai_upstream_error", UNAVAILABLE_MESSAGE);
+    return new AppError(400, "ai_provider_error", UNAVAILABLE_MESSAGE);
   }
   if (error instanceof ProviderNetworkError) {
     return new AppError(502, "ai_upstream_unavailable", UNAVAILABLE_MESSAGE);
