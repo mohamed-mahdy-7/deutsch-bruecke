@@ -65,17 +65,50 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   app.use(requestObservability());
   app.set("trust proxy", config.trustProxy ? 1 : false);
   app.use(helmet());
-  app.use(
-    cors({
-      origin(origin, callback) {
-        if (!origin || config.clientOrigins.includes(origin)) {
-          callback(null, true);
-          return;
-        }
-        callback(new AppError(403, "origin_not_allowed", "Origin is not allowed."));
-      },
-    }),
-  );
+  // Allow same-origin requests (Vercel/Render same origin, curl/health)
+  // automatically, plus CLIENT_ORIGIN and Vercel deployment URLs.
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (!origin) return next();
+
+    const allowed = new Set(config.clientOrigins);
+    for (const value of [
+      process.env.VERCEL_URL,
+      process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    ]) {
+      if (!value) continue;
+      const trimmed = value.trim();
+      const normalized = /^https?:\/\//i.test(trimmed)
+        ? trimmed.replace(/\/$/, "")
+        : `https://${trimmed.replace(/\/$/, "")}`;
+      allowed.add(normalized);
+    }
+
+    let originHost: string | null = null;
+    try {
+      originHost = new URL(origin).host?.toLowerCase() ?? null;
+    } catch {
+      originHost = null;
+    }
+    const rawHost = String(
+      req.headers?.["x-forwarded-host"] || req.headers?.host || "",
+    );
+    const requestHost = (rawHost.split(",")[0] ?? "").trim().toLowerCase();
+    const sameOrigin = Boolean(
+      originHost && requestHost && originHost === requestHost,
+    );
+
+    if (sameOrigin || allowed.has(origin)) return next();
+
+    console.warn("origin_rejected", {
+      origin,
+      allowed: [...allowed],
+      requestHost,
+    });
+    next(new AppError(403, "origin_not_allowed", "Origin is not allowed."));
+  });
+
+  app.use(cors({ origin: true }));
   app.use(express.json({ limit: "32kb" }));
 
   const chatLimiter = createRateLimiter({
