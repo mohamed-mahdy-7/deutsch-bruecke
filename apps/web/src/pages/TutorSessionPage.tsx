@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  ArrowRight,
+  CheckCircle2,
   ChevronLeft,
   Clock3,
   MessageCircle,
@@ -11,8 +13,8 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import type { AiAction } from "@/types/domain";
-import { getScenario } from "@/data/scenarios";
+import type { AiAction, ChatMessage, Scenario } from "@/types/domain";
+import { SCENARIOS, getScenario } from "@/data/scenarios";
 import { useAppPreferences } from "@/state/useAppPreferences";
 import { useCustomScenarios } from "@/state/CustomScenariosProvider";
 import { useProgress } from "@/state/ProgressProvider";
@@ -31,26 +33,53 @@ import {
 import { LEVEL_LABEL_KEY } from "@/lib/uiLabels";
 import { SCENARIO_THEME } from "@/lib/scenarioTheme";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/Badge";
+import { Modal } from "@/components/ui/Modal";
 import { Alert } from "@/components/ui/Alert";
+import { Badge } from "@/components/ui/Badge";
 import { Button, buttonCn } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Feedback";
-import { Modal } from "@/components/ui/Modal";
 import { ChatBubble } from "@/components/tutor/ChatBubble";
 import { AiPanel } from "@/components/tutor/AiPanel";
 import { WordSheet } from "@/components/tutor/WordSheet";
 
 export function TutorSessionPage() {
   const { scenarioId } = useParams();
-  const builtInScenario = scenarioId ? getScenario(scenarioId) : undefined;
   const {
     loading: customLoading,
     getScenario: getCustomScenario,
   } = useCustomScenarios();
   const customScenario =
-    !builtInScenario && scenarioId?.startsWith("custom_")
+    !getScenario(scenarioId ?? "") && scenarioId?.startsWith("custom_")
       ? getCustomScenario(scenarioId)
       : undefined;
+
+  const { progress } = useProgress();
+
+  const freeScenario: Scenario | undefined =
+    scenarioId === "free"
+      ? {
+          id: "free",
+          titleAr: "محادثة حرة",
+          titleEn: "Free conversation",
+          descriptionAr: "تحدث بحرية عن أي موضوع، والAI سيساعدك على التحسن.",
+          descriptionEn: "Talk freely about any topic; the AI will help you improve.",
+          level: progress?.profile.level ?? "A1",
+          durationMinutes: 10,
+          settingAr: "محادثة حرة",
+          settingEn: "A free conversation",
+          aiRoleAr: "شريك محادثة",
+          aiRoleEn: "Conversation partner",
+          openingDe: "Hallo! Worüber möchtest du heute sprechen?",
+          openingAr: "أهلًا! عن ماذا تحب أن نتحدث اليوم؟",
+          openingEn: "Hello! What would you like to talk about today?",
+          color: "blue",
+          goalsAr: ["تحدث بحرية", "استخدم ما تعرفه", "اسأل وجاوب"],
+          goalsEn: ["Speak freely", "Use what you know", "Ask and answer"],
+        }
+      : undefined;
+
+  const builtInScenario =
+    scenarioId === "free" ? freeScenario : getScenario(scenarioId ?? "");
   const scenario =
     builtInScenario ??
     (customScenario ? customScenarioToScenario(customScenario) : undefined);
@@ -60,7 +89,7 @@ export function TutorSessionPage() {
     customLoading;
   const { t, language } = useAppPreferences();
   const {
-    progress,
+    addVocabCard,
     ensureConversation,
     startNewConversation,
     appendUserMessage,
@@ -86,6 +115,7 @@ export function TutorSessionPage() {
     text: string;
   } | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [recapOpen, setRecapOpen] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -95,6 +125,64 @@ export function TutorSessionPage() {
       (item) => item.id === conversationId && item.scenarioId === scenario?.id,
     ) ?? null;
   const messages = conversation?.messages ?? [];
+
+  const recapMistakeMeta: Record<string, { labelAr: string; labelEn: string }> = {
+    article: { labelAr: "أدوات الاسم", labelEn: "Noun articles" },
+    case: { labelAr: "حالات الإعراب", labelEn: "German cases" },
+    verb_position: { labelAr: "مكان الفعل", labelEn: "Verb position" },
+    verb_conjugation: { labelAr: "تصريف الأفعال", labelEn: "Verb conjugation" },
+    word_order: { labelAr: "ترتيب الكلمات", labelEn: "Word order" },
+    preposition: { labelAr: "حروف الجر", labelEn: "Prepositions" },
+    vocabulary: { labelAr: "اختيار المفردات", labelEn: "Vocabulary" },
+    spelling: { labelAr: "الإملاء", labelEn: "Spelling" },
+  };
+
+  const recapMistakes = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const message of messages) {
+      if (message.role !== "user" || !message.correction) continue;
+      for (const mistake of message.correction.mistakes) {
+        counts.set(mistake.type, (counts.get(mistake.type) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([type, count]) => ({
+        type,
+        count,
+        label:
+          language === "ar"
+            ? recapMistakeMeta[type]?.labelAr ?? type
+            : recapMistakeMeta[type]?.labelEn ?? type,
+      }));
+  }, [messages, language]);
+
+  const recapWords = useMemo(() => {
+    const seen = new Set<string>();
+    const words: NonNullable<ChatMessage["vocabulary"]> = [];
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      for (const item of message.vocabulary ?? []) {
+        const key = `${item.article ?? ""}:${item.word.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        words.push(item);
+        if (words.length >= 5) break;
+      }
+    }
+    return words;
+  }, [messages]);
+
+  const suggestedScenario = useMemo(() => {
+    const level = progress?.profile.level ?? "A1";
+    const candidates = SCENARIOS.filter(
+      (item) => item.level === level && item.id !== scenarioId,
+    );
+    return candidates[0] ?? SCENARIOS[0];
+  }, [progress?.profile.level, scenarioId]);
+
+  const [recapAdded, setRecapAdded] = useState(false);
 
   const speech = useSpeechRecognition({
     language: "de-DE",
@@ -291,6 +379,17 @@ export function TutorSessionPage() {
           ) : aiMode === "demo" ? (
             <Badge tone="accent">{t("tutor.modeDemo")}</Badge>
           ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setRecapAdded(false);
+              setRecapOpen(true);
+            }}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-card px-2.5 text-xs font-bold text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("tutor.finishRecap")}
+          </button>
           <button
             type="button"
             onClick={() => setNewChatOpen(true)}
@@ -535,6 +634,111 @@ export function TutorSessionPage() {
           </form>
         </div>
       </div>
+
+      <Modal
+        open={recapOpen}
+        onClose={() => setRecapOpen(false)}
+        title={t("tutor.recapTitle")}
+        closeLabel={t("common.close")}
+        size="lg"
+      >
+        <div className="space-y-4">
+          <section>
+            <h3 className="text-sm font-extrabold">{t("tutor.recapMistakes")}</h3>
+            {recapMistakes.length === 0 ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("tutor.noMistakes")}
+              </p>
+            ) : (
+              <ul className="mt-2 space-y-2">
+                {recapMistakes.map((item) => (
+                  <li
+                    key={item.type}
+                    className="flex items-center justify-between rounded-xl border border-border/60 bg-card px-3 py-2 text-sm"
+                  >
+                    <span className="font-bold">{item.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      ×{item.count}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h3 className="text-sm font-extrabold">{t("tutor.recapWords")}</h3>
+            {recapWords.length === 0 ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("tutor.emptyHint")}
+              </p>
+            ) : (
+              <>
+                <ul className="mt-2 space-y-1.5">
+                  {recapWords.map((item) => (
+                    <li
+                      key={`${item.article ?? ""}:${item.word}`}
+                      className="flex items-center justify-between rounded-xl border border-border/60 bg-card px-3 py-2 text-sm"
+                    >
+                      <span className="german-inline font-bold">
+                        {item.article ? `${item.article} ` : ""}
+                        {item.word}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {item.translation_ar}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <Button
+                  className="mt-3"
+                  onClick={() => {
+                    for (const item of recapWords) {
+                      addVocabCard({
+                        word: item.word,
+                        article: item.article,
+                        plural: item.plural,
+                        translationAr: item.translation_ar,
+                        exampleDe: item.example_de,
+                        source: "chat",
+                      });
+                    }
+                    setRecapAdded(true);
+                  }}
+                  disabled={recapAdded}
+                >
+                  {recapAdded ? t("tutor.recapDone") : t("tutor.recapAddAll")}
+                </Button>
+              </>
+            )}
+          </section>
+
+          {suggestedScenario ? (
+            <section>
+              <h3 className="text-sm font-extrabold">{t("tutor.recapNext")}</h3>
+              <Link
+                to={`/tutor/${suggestedScenario.id}`}
+                className="surface-card mt-2 flex items-center justify-between gap-3 p-3 transition-all hover:-translate-y-0.5"
+                onClick={() => setRecapOpen(false)}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-bold">
+                    {language === "ar"
+                      ? suggestedScenario.titleAr
+                      : suggestedScenario.titleEn}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {language === "ar"
+                      ? suggestedScenario.descriptionAr
+                      : suggestedScenario.descriptionEn}
+                  </span>
+                </span>
+                <ArrowRight className="h-4 w-4 shrink-0 flip-rtl" aria-hidden="true" />
+              </Link>
+            </section>
+          ) : null}
+        </div>
+      </Modal>
 
       <WordSheet target={wordTarget} onClose={() => setWordTarget(null)} />
       <AiPanel target={panelTarget} onClose={() => setPanelTarget(null)} />

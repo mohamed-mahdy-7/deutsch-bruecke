@@ -214,6 +214,23 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
       const input = chatRequestSchema.parse(req.body);
       let scenario = findApiScenario(input.scenarioId);
 
+      if (input.scenarioId === "free") {
+        scenario = {
+          id: "free",
+          titleDe: "Freie Konversation",
+          role: "freundliche Gesprächspartnerin",
+          setting: "Eine freie Konversation auf Deutsch",
+          goal: "Freies Sprechen üben und korrigiert werden",
+          learnerLevelHint: input.level,
+          learnerRole: "Lernende/r",
+          formality: "du",
+          tone: "friendly",
+          grammarFocus: [],
+          keyVocab: [],
+          usefulPhrases: [],
+        };
+      }
+
       if (
         !scenario &&
         input.scenarioId.startsWith("custom_") &&

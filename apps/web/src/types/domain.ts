@@ -343,6 +343,7 @@ export type ScenarioId =
   | "interview"
   | "office"
   | "shopping"
+  | "free"
   | `custom_${string}`;
 
 export type ScenarioFormality = "du" | "Sie";

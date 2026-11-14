@@ -244,6 +244,16 @@ export const ar = {
 
   "tutor.title": "غرفة المحادثة",
   "tutor.chooseTitle": "اختار موقفك",
+  "tutor.freeBadge": "محادثة حرة",
+  "tutor.freeCta": "محادثة حرة",
+  "tutor.freeBody": "تحدث بحرية عن أي موضوع. لينا ستصحح بهدوء وتساعدك على التحسن.",
+  "tutor.recapTitle": "ملخص الجلسة",
+  "tutor.recapMistakes": "أكثر ٣ أخطاء",
+  "tutor.recapWords": "٥ كلمات للمراجعة",
+  "tutor.recapNext": "الموقف المقترح",
+  "tutor.recapAddAll": "أضف الكل للمراجعة",
+  "tutor.recapDone": "تمت الإضافة",
+  "tutor.finishRecap": "إنهاء وملخص",
   "tutor.chooseSubtitle":
     "كل موقف فيه شخصية ومهمة. لينا مش هتسيبك: هتصحح بهدوء وتكمّل معاك.",
   "tutor.level": "المستوى {level}",
@@ -1170,6 +1180,16 @@ export const en: Record<TranslationKey, string> = {
 
   "tutor.title": "Conversation room",
   "tutor.chooseTitle": "Choose your scene",
+  "tutor.freeBadge": "Free chat",
+  "tutor.freeCta": "Free conversation",
+  "tutor.freeBody": "Talk freely about any topic. Lina will gently correct you and help you improve.",
+  "tutor.recapTitle": "Session recap",
+  "tutor.recapMistakes": "Top 3 mistakes",
+  "tutor.recapWords": "5 words to review",
+  "tutor.recapNext": "Suggested next scenario",
+  "tutor.recapAddAll": "Add all to review",
+  "tutor.recapDone": "Added",
+  "tutor.finishRecap": "Finish & recap",
   "tutor.chooseSubtitle":
     "Each scene has a character and a mission. Lina never leaves you alone: she corrects calmly and keeps things moving.",
   "tutor.level": "Level {level}",

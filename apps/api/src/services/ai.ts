@@ -972,6 +972,35 @@ class DemoGateway implements AiGateway {
       };
     }
 
+    if (input.scenario.id === "free") {
+      const freeTurns = [
+        {
+          reply_de: "Das ist interessant! Erzähl mir mehr dazu.",
+          question_de: "Was genau meinst du?",
+          translation_ar: "مثير للاهتمام! أخبرني أكثر عن ذلك.",
+        },
+        {
+          reply_de: "Gut gesagt. Wie würdest du das auf Deutsch ausdrücken?",
+          question_de: "Wie würdest du das auf Deutsch ausdrücken?",
+          translation_ar: "جميل. كيف تعبّر عن ذلك بالألمانية؟",
+        },
+        {
+          reply_de: "Sehr gut! Möchtest du noch etwas hinzufügen?",
+          question_de: "Möchtest du noch etwas hinzufügen?",
+          translation_ar: "ممتاز! تحب تضيف anything؟",
+        },
+      ];
+      const chosen = freeTurns[assistantTurns % freeTurns.length] ?? freeTurns[0]!;
+      const safeSuffix =
+        input.safeMode && input.level !== "A1" ? " (سنكلم بهدوء أكثر)" : "";
+      return {
+        reply_de: chosen.reply_de,
+        translation_ar: chosen.translation_ar + safeSuffix,
+        correction: { ...correction, follow_up_question_de: chosen.question_de },
+        vocabulary: [],
+      };
+    }
+
     const turns = demoReplies[input.scenario.id] ?? demoReplies.cafe ?? [];
     const chosen = turns[assistantTurns % Math.max(1, turns.length)] ?? turns[0];
     if (!chosen) {

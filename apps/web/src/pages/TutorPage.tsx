@@ -114,6 +114,32 @@ export function TutorPage() {
       ) : null}
 
       <Link
+        to="/tutor/free"
+        className="surface-card group mt-5 flex flex-col gap-4 overflow-hidden border-accent/25 bg-gradient-to-br from-accent-soft/60 via-card to-primary-soft/40 p-5 transition-all hover:-translate-y-0.5 hover:shadow-lift sm:flex-row sm:items-center sm:justify-between sm:p-6"
+      >
+        <div className="flex items-start gap-3.5">
+          <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground shadow-sm">
+            <MessageCircle className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div className="min-w-0">
+            <p className="eyebrow">{t("tutor.freeBadge")}</p>
+            <h2 className="mt-1 text-lg font-extrabold sm:text-xl">
+              {t("tutor.freeCta")}
+            </h2>
+            <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground sm:text-sm">
+              {t("tutor.freeBody")}
+            </p>
+          </div>
+        </div>
+        <span
+          className={buttonCn("accent", "md", "shrink-0 self-start sm:self-auto")}
+        >
+          {t("tutor.freeCta")}
+          <ArrowRight className="h-4 w-4 flip-rtl" aria-hidden="true" />
+        </span>
+      </Link>
+
+      <Link
         to="/tutor/create"
         className="surface-card group mt-5 flex flex-col gap-4 overflow-hidden border-primary/25 bg-gradient-to-br from-primary-soft/70 via-card to-accent-soft/50 p-5 transition-all hover:-translate-y-0.5 hover:shadow-lift sm:flex-row sm:items-center sm:justify-between sm:p-6"
       >
