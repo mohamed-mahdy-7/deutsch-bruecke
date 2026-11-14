@@ -930,7 +930,7 @@ Deploy as one Vercel project (static web app + Express API as a serverless funct
 The Express app is exported from `api/index.ts` without calling `app.listen()`. `vercel.json` rewrites `/api/*` to the function and falls back all other routes to `/index.html`. `VITE_API_BASE_URL` defaults to `/api`, so the browser calls the same origin.
 
 Notes:
-- Hobby serverless functions are limited to 10 seconds (`maxDuration`), so very slow AI turns may time out. Keep prompts short or upgrade for longer limits.
+- Hobby serverless functions support up to 300 seconds (`maxDuration`), so AI turns have room to complete. Keep prompts reasonable; upgrade for longer limits or higher concurrency.
 - Rate limiting and caching are in-memory and per-instance in serverless; counters reset between invocations. The API still returns a clear 503 when no AI key is configured and never falls back to demo replies in production.
 - `.env` is never committed; set all secrets in the Vercel dashboard.
 
