@@ -123,6 +123,7 @@ export function ProfilePage() {
   const [saved, setSaved] = useState(false);
   const [dialog, setDialog] = useState<DialogKind>(null);
   const [busy, setBusy] = useState(false);
+  const [signOutSyncFailed, setSignOutSyncFailed] = useState(false);
   const [aiMode, setAiMode] = useState<AiMode | null>(null);
   const [aiReachable, setAiReachable] = useState<boolean | null>(null);
 
@@ -173,7 +174,16 @@ export function ProfilePage() {
         setDialog(null);
         navigate("/", { replace: true });
       } else if (dialog === "signout") {
+        if (!signOutSyncFailed) {
+          const ok = await retrySync();
+          if (!ok) {
+            setSignOutSyncFailed(true);
+            setBusy(false);
+            return;
+          }
+        }
         await signOut();
+        setSignOutSyncFailed(false);
         setDialog(null);
         navigate("/", { replace: true });
       } else if (dialog === "retake") {
@@ -208,7 +218,9 @@ export function ProfilePage() {
     dialog === "reset"
       ? t("profile.reset")
       : dialog === "signout"
-        ? t("profile.signOut")
+        ? signOutSyncFailed
+                     ? t("profile.signOutAnyway")
+                     : t("profile.signOut")
         : t("profile.retakeOnboarding");
 
   const dialogBody =
@@ -506,7 +518,10 @@ export function ProfilePage() {
                 size="sm"
                 className="mt-3 w-full text-danger hover:border-danger/30 hover:bg-danger/5"
                 icon={<LogOut className="h-3.5 w-3.5" />}
-                onClick={() => setDialog("signout")}
+                onClick={() => {
+                  setSignOutSyncFailed(false);
+                  setDialog("signout");
+                }}
               >
                 {t("profile.signOut")}
               </Button>
@@ -687,7 +702,9 @@ export function ProfilePage() {
               {dialog === "reset"
                 ? t("profile.resetAction")
                 : dialog === "signout"
-                  ? t("profile.signOut")
+                  ? signOutSyncFailed
+                     ? t("profile.signOutAnyway")
+                     : t("profile.signOut")
                   : t("profile.retake")}
             </Button>
           </div>
@@ -698,7 +715,9 @@ export function ProfilePage() {
             {t("profile.dataKept")}
           </Alert>
         ) : dialog === "signout" ? (
-          <Alert tone="info">{t("profile.signOutBody")}</Alert>
+          <Alert tone={signOutSyncFailed ? "warning" : "info"}>
+             {signOutSyncFailed ? t("sync.signOutWarning") : t("profile.signOutBody")}
+           </Alert>
         ) : (
           <Alert tone="info">{t("profile.retakeOnboardingBody")}</Alert>
         )}

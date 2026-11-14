@@ -123,7 +123,7 @@ interface ProgressContextValue {
   appendUserMessage: (conversationId: string, content: string) => ChatMessage | null;
   completeTutorTurn: (input: CompleteTutorTurnInput) => void;
   resetProgress: () => Promise<void>;
-  retrySync: () => Promise<void>;
+  retrySync: () => Promise<boolean>;
 }
 
 const ProgressContext = createContext<ProgressContextValue | null>(null);
@@ -735,14 +735,24 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const retrySync = useCallback(async () => {
-    if (authMode !== "authenticated" || !user) return;
+    if (authMode !== "authenticated" || !user) return false;
     const snapshot = progressRef.current;
-    if (!snapshot) return;
+    if (!snapshot) return true;
     userIdRef.current = user.id;
     syncAllowedRef.current = true;
     pendingSyncRef.current = snapshot;
-    await flushRemoteSync();
-  }, [authMode, user, flushRemoteSync]);
+    setSyncStatus("syncing");
+    try {
+      await saveRemoteProgress(snapshot, user.id);
+      pendingSyncRef.current = null;
+      setSyncStatus("synced");
+      return true;
+    } catch (error) {
+      console.warn("[sync] Remote progress sync failed:", error);
+      setSyncStatus("error");
+      return false;
+    }
+  }, [authMode, user]);
 
   const resetProgress = useCallback(async () => {
     const current = progressRef.current;
