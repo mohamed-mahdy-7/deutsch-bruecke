@@ -28,6 +28,7 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 - [Capacitor packaging guide](#capacitor-packaging-guide)
 - [Phase 2](#phase-2)
 - [Phase 3](#phase-3)
+- [Phase 4](#phase-4)
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
 
@@ -875,6 +876,17 @@ Implemented in Phase 3:
 - Arabic RTL, the English toggle, German LTR isolation, and der/die/das colour coding are preserved across every new screen.
 
 Automated coverage was expanded for curriculum progression, word alignment and dictation scoring, pronunciation scoring, metrics, request IDs, rate limiting, and Redis fallback. Native runtime builds still require Android Studio/Xcode and a device or emulator.
+
+## Phase 4 — Free conversation and session recap
+Implemented in Phase 4:
+
+- **Free conversation** — a new card on the Tutor screen opens `/tutor/free`, a scenario-free chat at the learner's own level. The tutor still corrects gently and suggests vocabulary; the scenario is synthesized on both web and API so the existing chat pipeline is reused.
+- **Session recap** — the "Finish & recap" button in any conversation opens a modal with the top three mistake patterns from that session, up to five review words added to the SRS deck in one tap, and one suggested next scenario matched to the learner's level.
+- Mistake patterns continue to feed the weak-spots list on every turn, so drills and progress stay in sync.
+- Arabic RTL, the English toggle, German LTR isolation, and der/die/das colour coding are preserved, with loading/empty/error states on the new surfaces.
+- The demo provider returns deterministic free-chat replies, so the whole flow is testable without an API key.
+
+Automated coverage includes the Modal focus-retention regression test and the existing web/API suites. Rate limiting, caching, Zod validation, retry-with-repair, and dual-provider parity are unchanged and apply to the free-chat path.
 
 ---
 
