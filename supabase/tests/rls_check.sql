@@ -63,3 +63,64 @@ begin
   raise notice 'RLS check passed: anon cannot read vocab_cards.';
 end $$;
 reset role;
+
+-- ============================================================================
+-- profiles upsert + column protection (Phase 2 grant fix)
+-- ============================================================================
+
+do $$
+declare
+  user_a uuid := '00000000-0000-0000-0000-000000000001'; -- replace
+  user_b uuid := '00000000-0000-0000-0000-000000000002'; -- replace
+begin
+  perform set_config('request.jwt.claims', json_build_object('sub', user_a, 'role', 'authenticated')::text, true);
+  set role authenticated;
+  insert into public.profiles (user_id, display_name, level)
+  values (user_a, 'A', 'A1')
+  on conflict (user_id) do update set display_name = excluded.display_name;
+
+  update public.profiles set display_name = 'A2' where user_id = user_a;
+  if not exists (select 1 from public.profiles where user_id = user_a and display_name = 'A2') then
+    raise exception 'RLS FAIL: user A cannot update own profile';
+  end if;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', user_b, 'role', 'authenticated')::text, true);
+  begin
+    update public.profiles set display_name = 'hacked' where user_id = user_a;
+    if exists (select 1 from public.profiles where user_id = user_a and display_name = 'hacked') then
+      raise exception 'RLS FAIL: user B updated user A profile';
+    end if;
+  exception when others then null;
+  end;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', user_a, 'role', 'authenticated')::text, true);
+  begin
+    update public.profiles set approved = true where user_id = user_a;
+    raise exception 'RLS FAIL: user A could update approved';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.profiles set role = 'owner' where user_id = user_a;
+    raise exception 'RLS FAIL: user A could update role';
+  exception when insufficient_privilege then null;
+  end;
+
+  delete from public.profiles where user_id = user_a;
+  reset role;
+  raise notice 'RLS check passed: profiles upsert + column protection work.';
+end $$;
+
+set role anon;
+do $$
+begin
+  begin
+    insert into public.profiles (user_id) values ('00000000-0000-0000-0000-000000000099'::uuid);
+    raise exception 'RLS FAIL: anon can insert profiles';
+  exception when others then null;
+  end;
+  if exists (select 1 from public.profiles limit 1) then
+    raise exception 'RLS FAIL: anon can read profiles';
+  end if;
+  raise notice 'RLS check passed: anon cannot access profiles.';
+end $$;
+reset role;
