@@ -29,6 +29,7 @@ The app runs as a guest out of the box with local-first progress. Supabase is op
 - [Phase 2](#phase-2)
 - [Phase 3](#phase-3)
 - [Phase 4](#phase-4)
+- [Deploy for free](#deploy-for-free)
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
 
@@ -887,6 +888,33 @@ Implemented in Phase 4:
 - The demo provider returns deterministic free-chat replies, so the whole flow is testable without an API key.
 
 Automated coverage includes the Modal focus-retention regression test and the existing web/API suites. Rate limiting, caching, Zod validation, retry-with-repair, and dual-provider parity are unchanged and apply to the free-chat path.
+
+## Deploy for free
+
+### API on Render (free web service)
+- Root directory: repository root (or `apps/api` if deploying the workspace alone).
+- Build command: `npm run build --workspace @bruecke/api`
+- Start command: `npm run start --workspace @bruecke/api`
+- The API reads `PORT` from the environment, binds to `0.0.0.0`, and exposes `GET /api/health` without auth.
+
+### Web app on Cloudflare Pages
+- Root directory: `apps/web`
+- Build command: `npm run build`
+- Build output directory: `dist`
+- SPA fallback is provided by `apps/web/public/_redirects` (`/* /index.html 200`).
+
+### Required environment variables
+Render (API):
+- `NODE_ENV=production`
+- `CLIENT_ORIGIN` — your Cloudflare Pages URL (comma-separated for multiple origins)
+- `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` (secret) — at least one for live AI
+- Optional: `AI_PROVIDER`, `AI_DEMO_MODE` (keep `false` in production), `REDIS_URL`, `TRUST_PROXY=1` behind a proxy, rate-limit overrides, `LOG_REQUESTS`
+
+Cloudflare Pages (web):
+- `VITE_API_BASE_URL` — your Render API URL (e.g. `https://your-api.onrender.com/api`)
+- `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (optional, for accounts)
+
+Secrets: all `*_API_KEY` values and Supabase keys. Never commit `.env`.
 
 ---
 
