@@ -325,7 +325,14 @@ export function TutorSessionPage() {
       completeTutorTurn({
         conversationId: conversation.id,
         userMessageId: messageId,
-        correction: data.correction,
+        correction: {
+          ...data.correction,
+          corrected: data.correction.corrected ?? "",
+          mistakes: data.correction.mistakes ?? [],
+          isCorrect: data.correction.isCorrect ?? false,
+          praise_ar: data.correction.praise_ar ?? "",
+          follow_up_question_de: data.correction.follow_up_question_de ?? "",
+        },
         replyDe: data.reply_de,
         translationAr: data.translation_ar,
         vocabulary: data.vocabulary,

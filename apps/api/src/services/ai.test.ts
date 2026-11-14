@@ -138,7 +138,7 @@ describe("requestStructuredJson", () => {
         structuredSchema,
         "Repair it.",
       ),
-    ).rejects.toMatchObject({ status: 502, code: "ai_format_error" });
+    ).rejects.toMatchObject({ status: 422, code: "ai_invalid_response" });
   });
 });
 
@@ -162,6 +162,7 @@ describe("GeminiGateway", () => {
       translation_ar: "نهارك سعيد! تحب قهوة؟",
       correction: {
         corrected: "Hallo",
+        isCorrect: true,
         mistakes: [],
         praise_ar: "تمام، بداية جميلة.",
         follow_up_question_de: "Möchten Sie einen Kaffee?",

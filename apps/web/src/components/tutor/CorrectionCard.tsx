@@ -37,23 +37,32 @@ export function CorrectionCard({
         </p>
       ) : null}
 
-      <div className="mt-3 rounded-xl border border-border/60 bg-card p-3">
-        <p className="text-[0.68rem] font-bold text-muted-foreground">
-          {t("tutor.corrected")}
+      {correction.isCorrect ? (
+        <p className="mt-3 flex items-center gap-1.5 text-xs font-semibold text-success">
+          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("tutor.noMistakes")}
         </p>
-        <div className="mt-1 flex items-start gap-2">
-          <GermanText
-            text={correction.corrected}
-            onWordClick={onWordClick}
-            className="min-w-0 flex-1 text-[0.95rem] font-semibold"
-          />
-          <SpeakerButton
-            text={correction.corrected}
-            className="h-8 w-8"
-            label={t("common.listen")}
-          />
+      ) : null}
+
+      {correction.corrected ? (
+        <div className="mt-3 rounded-xl border border-border/60 bg-card p-3">
+          <p className="text-[0.68rem] font-bold text-muted-foreground">
+            {t("tutor.corrected")}
+          </p>
+          <div className="mt-1 flex items-start gap-2">
+            <GermanText
+              text={correction.corrected}
+              onWordClick={onWordClick}
+              className="min-w-0 flex-1 text-[0.95rem] font-semibold"
+            />
+            <SpeakerButton
+              text={correction.corrected}
+              className="h-8 w-8"
+              label={t("common.listen")}
+            />
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {correction.mistakes.length > 0 ? (
         <ul className="mt-3 space-y-2.5">

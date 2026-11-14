@@ -43,6 +43,7 @@ import {
 } from "../prompts/assist.js";
 import type { ApiScenario } from "../data/scenarios.js";
 import { AppError } from "../lib/errors.js";
+import { normalizeTutorResponse } from "../lib/normalize.js";
 import {
   mapProviderError,
   normalizeAnthropicError,
@@ -102,6 +103,7 @@ export async function requestStructuredJson<T>(
   messages: ModelMessage[],
   schema: ZodType<T, ZodTypeDef, unknown>,
   repairInstruction: string,
+  normalize?: (value: unknown) => unknown,
 ): Promise<T> {
   let requestMessages = messages;
 
@@ -133,14 +135,16 @@ export async function requestStructuredJson<T>(
         continue;
       }
       throw new AppError(
-        502,
+        422,
         "ai_empty_response",
         "The tutor could not generate a reply. Please try again.",
       );
     }
 
     try {
-      return schema.parse(parseJsonObject(raw));
+      const parsed = parseJsonObject(raw);
+      const normalized = normalize ? normalize(parsed) : parsed;
+      return schema.parse(normalized);
     } catch (error) {
       console.warn(
         `[ai] Invalid structured response on attempt ${attempt + 1}:`,
@@ -155,9 +159,9 @@ export async function requestStructuredJson<T>(
         continue;
       }
       throw new AppError(
-        502,
-        "ai_format_error",
-        "The tutor's answer could not be processed. Please try once more.",
+        422,
+        "ai_invalid_response",
+        "تعذّر معالجة رد المدرّس. جرّب تاني.",
       );
     }
   }
@@ -205,6 +209,52 @@ export interface AiGateway {
  * Anthropic and Gemini receive identical system prompts, history windows,
  * Zod contracts, and repair instructions.
  */
+const tutorResponseJsonSchema = {
+  type: "object",
+  properties: {
+    reply_de: { type: "string" },
+    translation_ar: { type: "string" },
+    correction: {
+      type: "object",
+      properties: {
+        corrected: { type: "string" },
+        isCorrect: { type: "boolean" },
+        mistakes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string" },
+              original: { type: "string" },
+              fix: { type: "string" },
+              explanation_ar: { type: "string" },
+            },
+            required: ["type", "original", "fix", "explanation_ar"],
+          },
+        },
+        praise_ar: { type: "string" },
+        follow_up_question_de: { type: "string" },
+      },
+      required: ["corrected", "mistakes", "praise_ar", "follow_up_question_de"],
+    },
+    vocabulary: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          word: { type: "string" },
+          article: { type: ["string", "null"] },
+          plural: { type: ["string", "null"] },
+          translation_ar: { type: "string" },
+          example_de: { type: "string" },
+        },
+        required: ["word", "translation_ar", "example_de"],
+      },
+    },
+  },
+  required: ["reply_de", "translation_ar", "correction", "vocabulary"],
+};
+
 abstract class PromptGateway implements AiGateway {
   abstract readonly mode: "live" | "demo";
 
@@ -214,6 +264,8 @@ abstract class PromptGateway implements AiGateway {
     schema: ZodType<T, ZodTypeDef, unknown>,
     repairInstruction: string,
     maxTokens?: number,
+    normalize?: (value: unknown) => unknown,
+    responseSchema?: unknown,
   ): Promise<T>;
 
   async tutor(input: {
@@ -241,6 +293,8 @@ abstract class PromptGateway implements AiGateway {
       buildTutorRepairPrompt(),
       // One tutor turn: reply + translation + up to 3 corrections.
       1_800,
+      (value) => normalizeTutorResponse(value, input.learnerMessage),
+      tutorResponseJsonSchema,
     );
   }
 
@@ -351,6 +405,7 @@ class AnthropicGateway extends PromptGateway {
     system: string,
     messages: ModelMessage[],
     maxTokens = 1_800,
+    _responseSchema?: unknown,
   ): Promise<string> {
     return withProviderRetry(async () => {
       try {
@@ -379,12 +434,15 @@ class AnthropicGateway extends PromptGateway {
     schema: ZodType<T, ZodTypeDef, unknown>,
     repairInstruction: string,
     maxTokens?: number,
+    normalize?: (value: unknown) => unknown,
+    responseSchema?: unknown,
   ): Promise<T> {
     return requestStructuredJson(
-      (nextMessages) => this.generate(system, nextMessages, maxTokens),
+      (nextMessages) => this.generate(system, nextMessages, maxTokens, responseSchema),
       messages,
       schema,
       repairInstruction,
+      normalize,
     );
   }
 }
@@ -415,6 +473,7 @@ class GeminiGateway extends PromptGateway {
     system: string,
     messages: ModelMessage[],
     maxTokens = 1_800,
+    responseSchema?: unknown,
   ): Promise<string> {
     const payload = await withProviderRetry(async () => {
       let response: Response;
@@ -438,6 +497,7 @@ class GeminiGateway extends PromptGateway {
                 temperature: 0.45,
                 maxOutputTokens: maxTokens,
                 responseMimeType: "application/json",
+                ...(responseSchema ? { responseSchema } : {}),
               },
             }),
             signal: AbortSignal.timeout(config.providerTimeoutMs),
@@ -485,12 +545,15 @@ class GeminiGateway extends PromptGateway {
     schema: ZodType<T, ZodTypeDef, unknown>,
     repairInstruction: string,
     maxTokens?: number,
+    normalize?: (value: unknown) => unknown,
+    responseSchema?: unknown,
   ): Promise<T> {
     return requestStructuredJson(
-      (nextMessages) => this.generate(system, nextMessages, maxTokens),
+      (nextMessages) => this.generate(system, nextMessages, maxTokens, responseSchema),
       messages,
       schema,
       repairInstruction,
+      normalize,
     );
   }
 }
@@ -920,6 +983,7 @@ class DemoGateway implements AiGateway {
     const { corrected, mistakes } = normalizeDemoCorrection(input.learnerMessage);
     const correction = {
       corrected,
+      isCorrect: mistakes.length === 0,
       mistakes,
       praise_ar:
         mistakes.length > 0

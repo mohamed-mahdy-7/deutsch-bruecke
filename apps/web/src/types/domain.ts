@@ -50,6 +50,7 @@ export interface Mistake {
 
 export interface Correction {
   corrected: string;
+  isCorrect?: boolean;
   mistakes: Mistake[];
   praise_ar: string;
   follow_up_question_de: string;

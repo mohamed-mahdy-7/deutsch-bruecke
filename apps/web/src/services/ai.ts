@@ -29,10 +29,11 @@ const mistakeSchema = z.object({
 });
 
 const correctionSchema = z.object({
-  corrected: z.string(),
-  mistakes: z.array(mistakeSchema).max(3),
-  praise_ar: z.string(),
-  follow_up_question_de: z.string(),
+  corrected: z.string().default(""),
+  isCorrect: z.boolean().default(false),
+  mistakes: z.array(mistakeSchema).max(3).default([]),
+  praise_ar: z.string().default(""),
+  follow_up_question_de: z.string().default(""),
 });
 
 const vocabularySuggestionSchema = z.object({

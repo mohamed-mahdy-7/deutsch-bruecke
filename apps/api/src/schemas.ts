@@ -54,15 +54,16 @@ export const mistakeSchema = z.object({
 });
 
 export const correctionSchema = z.object({
-  corrected: z.string().trim().min(1).max(800),
-  mistakes: z.array(mistakeSchema).max(3),
-  praise_ar: z.string().trim().min(1).max(500),
-  follow_up_question_de: z.string().trim().min(1).max(300),
+  corrected: z.string().trim().max(800).default(""),
+  isCorrect: z.boolean().default(false),
+  mistakes: z.array(mistakeSchema).max(3).default([]),
+  praise_ar: z.string().trim().max(500).default(""),
+  follow_up_question_de: z.string().trim().max(300).default(""),
 });
 
 export const vocabularySuggestionSchema = z.object({
   word: z.string().trim().min(1).max(80),
-  article: z.enum(["der", "die", "das"]).nullable(),
+  article: z.enum(["der", "die", "das"]).nullable().optional(),
   plural: z.string().trim().max(100).nullable(),
   translation_ar: z.string().trim().min(1).max(200),
   example_de: z.string().trim().min(1).max(300),
@@ -77,7 +78,7 @@ export const tutorResponseSchema = z.object({
 
 const keyVocabSchema = z.object({
   de: z.string().trim().min(1).max(60),
-  article: z.enum(["der", "die", "das"]).nullable(),
+  article: z.enum(["der", "die", "das"]).nullable().optional(),
   plural: z.string().trim().max(80).nullable(),
   ar: z.string().trim().min(1).max(120),
 });
@@ -200,7 +201,7 @@ export const wordRequestSchema = z.object({
 
 export const wordResponseSchema = z.object({
   word: z.string().trim().min(1).max(100),
-  article: z.enum(["der", "die", "das"]).nullable(),
+  article: z.enum(["der", "die", "das"]).nullable().optional(),
   plural: z.string().trim().max(100).nullable(),
   part_of_speech: z.string().trim().min(1).max(60),
   meaning_ar: z.string().trim().min(1).max(400),

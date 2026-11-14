@@ -6,7 +6,7 @@ import type {
 
 export interface ApiKeyVocab {
   de: string;
-  article: "der" | "die" | "das" | null;
+  article?: "der" | "die" | "das" | null;
   plural: string | null;
   ar: string;
 }
